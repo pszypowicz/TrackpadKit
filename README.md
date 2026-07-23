@@ -1,17 +1,62 @@
-# gesture-lab
+# TrackpadKit
 
-A standalone AppKit lab for prototyping a raw-`NSTouch` trackpad
-gesture recognizer on macOS - multi-finger swipes and pinches
-recognized from the touch stream itself, coexisting with normal
+A raw-`NSTouch` trackpad gesture engine for macOS: multi-finger swipes
+and pinches recognized from the touch stream itself, with real finger
+counts, deterministic replay, and coexistence with normal
 `scrollWheel`/`magnify` handling instead of replacing it.
 
-The recognizer is a single portable file with no AppKit dependency,
-written to be lifted into a real app (originally a Ghostty fork). The
-lab around it exists because iterating on gesture feel inside a big app
-is minutes per build; here it is seconds, and every tuning question has
-either an on-screen counter or a deterministic replay to answer it.
+Why raw touches: AppKit's high-level `swipe(with:)` no longer fires for
+trackpad swipes (macOS ships them as scroll events), scroll events
+don't carry finger counts, and `NSGestureRecognizer` never receives
+trackpad touches. The only way to get finger-count-aware gestures is to
+read the `NSTouch` stream and recognize them yourself - TrackpadKit is
+that recognizer, packaged.
 
-## Build and run
+The package has two parts:
+
+- **`TrackpadKit`** - the library. A single-purpose engine with no
+  AppKit dependency: driven by `TouchFrame` values, emits
+  `GestureEvent { kind, direction, fingerCount, magnitude, velocity,
+phase }`. Deterministic and replayable from disk.
+- **`gesture-lab`** - the AppKit research harness the engine is
+  developed and tuned in: live overlay, OS-event A/B counters,
+  record/replay, threshold knobs.
+
+## Using the library
+
+```swift
+// Package.swift
+.package(url: "https://github.com/pszypowicz/TrackpadKit.git", from: "0.1.0")
+```
+
+```swift
+import TrackpadKit
+
+let recognizer = TrackpadGestureRecognizer()
+recognizer.onGesture = { event in
+    // .swipe: event.direction, magnitude in device points along the axis
+    // .pinch: magnitude is scale relative to the spread at lock (1.0 = unchanged)
+    // phases: .began / .changed / .ended (with fling velocity) / .cancelled
+}
+```
+
+Feed it from your view's raw touch overrides by adapting `NSTouch` to
+`TouchFrame` (map touch identities to small ints, keep
+`normalizedPosition` plus `deviceSize`), and drive time forward from a
+timer while touches are down - stationary fingers stop producing touch
+events, but the settle timer still has to fire:
+
+```swift
+recognizer.process(TouchFrame(t: event.timestamp, w: pad.width, h: pad.height,
+                              touches: samples))
+recognizer.tick(now: ProcessInfo.processInfo.systemUptime)  // ~120 Hz while touching
+```
+
+`Sources/gesture-lab/TouchView.swift` is the reference host: first
+responder setup, `allowedTouchTypes = [.indirect]`, the
+`NSTouch -> TouchFrame` adaptation, and the tick timer.
+
+## The gesture-lab harness
 
 Requires macOS 14+ and a Swift 5.10 toolchain.
 
@@ -20,35 +65,15 @@ swift build
 swift run gesture-lab                 # interactive lab window
 swift run gesture-lab --replay fixtures/swipe-left-3f.jsonl
 swift run gesture-lab --replay fixtures/swipe-left-3f.jsonl --verbose
+swift test                            # replay every fixture, assert outcomes
 ```
 
 Plain SwiftPM executable, programmatic `NSApplication`, no bundle. If
 the app is frontmost and the cursor is over the window, trackpad touches
 arrive; AppKit routes indirect touches (like scroll events) to the view
 under the cursor, so keep the pointer inside the window while gesturing.
-If touches ever fail to arrive as a bare executable, the fallback is a
-minimal `.app` wrapper, but that has not been needed so far.
 
-## Files
-
-- `Sources/gesture-lab/TrackpadGestureRecognizer.swift` - the portable
-  deliverable. Depends only on Foundation and CoreGraphics, never sees
-  `NSTouch`/`NSEvent`, is driven by `TouchFrame` values and emits
-  `GestureEvent { kind, direction, fingerCount, magnitude, velocity,
-phase }`. This is the file to lift into your app.
-- `Sources/gesture-lab/TouchView.swift` - the lab surface, set up the
-  way a real app's view would be (`acceptsFirstResponder`,
-  `allowedTouchTypes = [.indirect]`, raw touch overrides, real
-  `scrollWheel`/`magnify` overrides). Adapts `NSTouch` to `TouchFrame`
-  (identity objects mapped to small ints via copied identities as
-  dictionary keys) and draws the overlay.
-- `Sources/gesture-lab/Replay.swift` - headless deterministic replay.
-- `Sources/gesture-lab/TouchRecorder.swift` - JSONL frame recorder.
-  Recordings land in `recordings/` (created on demand, gitignored).
-- `scripts/make-fixture.py` - synthetic gesture generator (see
-  `--help`).
-
-## Controls
+### Controls
 
 | Key            | Action                                                    |
 | -------------- | --------------------------------------------------------- |
@@ -59,6 +84,24 @@ phase }`. This is the file to lift into your app.
 | `p` / `P`      | pinch commit threshold down / up                          |
 | Cmd+O          | replay a recording (prints to the terminal)               |
 
+## Files
+
+- `Sources/TrackpadKit/TrackpadGestureRecognizer.swift` - the engine.
+  Depends only on Foundation and CoreGraphics, never sees
+  `NSTouch`/`NSEvent`.
+- `Sources/TrackpadKit/TouchStreamReplay.swift` - JSONL parsing and the
+  deterministic replay clock shared by the CLI and the tests.
+- `Sources/gesture-lab/TouchView.swift` - the lab surface and reference
+  host; adapts `NSTouch` to `TouchFrame` and draws the overlay.
+- `Sources/gesture-lab/Replay.swift` - the `--replay` CLI printer.
+- `Sources/gesture-lab/TouchRecorder.swift` - JSONL frame recorder.
+  Recordings land in `recordings/` (created on demand, gitignored).
+- `Tests/TrackpadKitTests/ReplayFixtureTests.swift` - replays every
+  fixture and asserts kind, direction, finger count, and magnitudes; a
+  fixture without an expectation entry fails the suite.
+- `scripts/make-fixture.py` - synthetic gesture generator (see
+  `--help`).
+
 ## Recognizer model
 
 Hand-rolled state machine, mirroring Apple's `DualTouchTracker` sample
@@ -66,16 +109,17 @@ rather than `NSGestureRecognizer` (which never receives trackpad
 touches):
 
 ```
-idle -> settling -> locked(N) -> committed(swipe|pinch) -> idle
-                        \-> awaitingLift (drain until all fingers up)
+idle -> settling <-> locked(N) -> committed(swipe|pinch) -> idle
+                                       \-> awaitingLift (drain until all fingers up)
 ```
 
-- **Settling / finger-count lock**: every added finger restarts a 60 ms
-  settle timer, so staggered landings still lock the intended count;
-  centroid motion over 2 pt locks immediately (a moving hand is done
-  landing). A finger lifting before lock (a tap) drains without
-  recognizing. `wantsRestingTouches` stays false, so resting thumbs are
-  filtered by AppKit before we see them.
+- **Settling / finger-count lock**: any finger-count change restarts a
+  60 ms settle timer, so staggered landings still lock the intended
+  count and a transient extra contact leaves the surviving fingers as
+  the candidate set; centroid motion over 2 pt locks immediately (a
+  moving hand is done landing). A bare tap recognizes nothing.
+  `wantsRestingTouches` stays false in the lab view, so resting thumbs
+  are filtered by AppKit before we see them.
 - **Commit-and-lock arbitration**: from the lock baseline both signals
   are measured continuously - centroid translation (swipe) and mean
   distance from centroid (pinch spread). First signal past its
@@ -85,10 +129,15 @@ idle -> settling -> locked(N) -> committed(swipe|pinch) -> idle
   loser's by the dominance margin, otherwise we stay in the deadzone
   and wait for a clearer frame. That margin is the main feel knob
   against sloppy diagonals.
+- **Pre-commit count changes re-settle**: a contact joining or leaving
+  before commit re-arms the settle window around the current touches.
+  Nothing has been emitted yet, so there is nothing to protect by
+  draining - draining here is what used to eat swipes grazed by a
+  thumb or palm.
 - **End vs cancel**: a lifted finger ends a committed gesture with a
   fling velocity (measured over the last 100 ms, so pausing before
   lifting flings at 0, like the OS); an added finger cancels it. Both
-  drain until the trackpad is empty.
+  drain until the trackpad is empty - one action per physical gesture.
 - **Units**: positions are `normalizedPosition * deviceSize`, i.e.
   device points (1/72 in), so thresholds are trackpad-size independent.
   A 14" MacBook Pro pad and a Magic Trackpad need no retuning.
@@ -107,6 +156,7 @@ All in `TrackpadGestureRecognizer.Config`, live-tunable in the overlay:
 | `velocityWindow`       | 100 ms  | velocity/fling estimation window                                 |
 | `swipeFingerCounts`    | 2...4   | counts allowed to commit a swipe                                 |
 | `pinchFingerCounts`    | 2...2   | counts allowed to commit a pinch                                 |
+| `staleFrameTimeout`    | 400 ms  | frame gap that abandons a sequence (host stopped delivering)     |
 
 ## Record / replay
 
@@ -124,14 +174,15 @@ Recording writes one JSON object per touch frame:
 `t` is the event timestamp (only deltas matter), `w`/`h` are
 `NSTouch.deviceSize`, positions are normalized. Replay steps a
 synthetic 240 Hz clock between frames so the settle timer fires exactly
-as it would live: same file in, same gestures out, every run.
+as it would live: same file in, same gestures out, every run. The
+fixture tests (`swift test`) pin this down in CI.
 
 ## Findings
 
 ### Verified by deterministic replay (synthetic fixtures)
 
 All of `fixtures/` replays to the expected result with the default
-thresholds:
+thresholds (asserted by `swift test`):
 
 - 3-finger left, 2-finger up, 4-finger right swipes: correct kind,
   direction, and count; fling velocity matches the synthetic motion
@@ -144,12 +195,11 @@ thresholds:
   cross-commit), a 2-finger tap and a sub-threshold wander recognize
   nothing, and a 3-finger pinch is rejected because pinch only commits
   at 2 fingers.
-- Thumb graze (`--transient-at`): a transient extra touch that joins a
-  2-finger swipe and lifts before commit doesn't discard the swipe. If
-  it lifts during settling the count simply re-arms; if it already
-  locked as 3, the state trace recovers via settling -> locked(3) ->
-  settling -> locked(2) -> committed(swipe, 2). Pre-commit count
-  changes re-settle; only a committed gesture drains to awaitingLift.
+- Transient graze (`--transient-at`): an extra contact (thumb or palm)
+  that joins a 2-finger swipe and lifts before commit doesn't discard
+  the swipe. If it lifts during settling the count simply re-arms; if
+  it already locked as 3, the state trace recovers via settling ->
+  locked(3) -> settling -> locked(2) -> committed(swipe, 2).
 
 ### To confirm on hardware (needs a hand on the trackpad)
 

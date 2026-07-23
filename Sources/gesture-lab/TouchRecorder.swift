@@ -1,4 +1,5 @@
 import Foundation
+import TrackpadKit
 
 /// Streams TouchFrames to a JSONL file, one frame per line, so real
 /// gestures can be replayed deterministically through the recognizer.

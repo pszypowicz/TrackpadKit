@@ -2,12 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "gesture-lab",
+    name: "TrackpadKit",
     platforms: [.macOS(.v14)],
+    products: [
+        .library(name: "TrackpadKit", targets: ["TrackpadKit"])
+    ],
     targets: [
+        .target(name: "TrackpadKit"),
         .executableTarget(
             name: "gesture-lab",
-            path: "Sources/gesture-lab"
+            dependencies: ["TrackpadKit"]
+        ),
+        .testTarget(
+            name: "TrackpadKitTests",
+            dependencies: ["TrackpadKit"]
         )
     ]
 )

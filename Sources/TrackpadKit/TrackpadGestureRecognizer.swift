@@ -1,15 +1,13 @@
 // TrackpadGestureRecognizer
 //
-// A raw-NSTouch trackpad gesture recognizer, self-contained on purpose:
-// it depends only on Foundation and CoreGraphics, never sees NSTouch or
-// NSEvent, and is driven entirely by TouchFrame values. That keeps it
-// replayable from disk and portable across a C boundary into another
-// apprt without changes.
-//
-// This file is kept identical with the standalone prototyping harness the
-// recognizer is developed and tuned in, whose live overlay and record and
-// replay tooling consume the DebugSnapshot API; hosts that don't visualize
-// simply don't call it.
+// TrackpadKit's core: a raw-NSTouch trackpad gesture recognizer,
+// self-contained on purpose - it depends only on Foundation and
+// CoreGraphics, never sees NSTouch or NSEvent, and is driven entirely
+// by TouchFrame values. That keeps it deterministic, replayable from
+// disk, and portable into any host that can supply a touch stream
+// (even across a C boundary). The DebugSnapshot API exists for
+// visualizing hosts such as the gesture-lab harness overlay; hosts
+// that don't visualize simply don't call it.
 //
 // Model (mirrors Apple's LightTable/DualTouchTracker sample, not
 // NSGestureRecognizer - gesture recognizers do not receive trackpad

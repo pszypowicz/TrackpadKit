@@ -1,4 +1,5 @@
 import AppKit
+import TrackpadKit
 
 /// The lab surface. Mirrors how Ghostty's surface view is set up
 /// (first responder, indirect touches, raw touch overrides plus real
