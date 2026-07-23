@@ -16,7 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = touchView
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(touchView)
-        NSApp.activate()
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -58,7 +58,7 @@ responder setup, `allowedTouchTypes = [.indirect]`, the
 
 ## The gesture-lab harness
 
-Requires macOS 14+ and a Swift 5.10 toolchain.
+Requires macOS 13+ and a Swift 5.10 toolchain.
 
 ```sh
 swift build
