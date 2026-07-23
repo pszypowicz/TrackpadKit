@@ -70,6 +70,38 @@ final class PalmFilterTests: XCTestCase {
         XCTAssertEqual(filter.state(of: 1), .palm)
     }
 
+    func testLateLanderIsQuarantined() {
+        let filter = PalmFilter()
+        XCTAssertNotNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.5, phase: .began)])))
+        // 16 pt of recent travel: the finger is established and moving.
+        for i in 1...4 {
+            let x = 0.5 + Double(i) * 4.0 / 400.0
+            XCTAssertNotNil(filter.process(frame(Double(i) * 0.01,
+                                                 [.init(id: 1, x: x, y: 0.5, phase: .moved)])))
+        }
+        let out = filter.process(frame(0.05, [.init(id: 2, x: 0.5, y: 0.6, phase: .began)]))
+        XCTAssertNil(out, "a touch landing during finger motion is a suspect")
+        XCTAssertEqual(filter.state(of: 2), .pending)
+    }
+
+    func testLanderAfterMotionStopsIsFinger() {
+        let filter = PalmFilter()
+        XCTAssertNotNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.5, phase: .began)])))
+        for i in 1...4 {
+            let x = 0.5 + Double(i) * 4.0 / 400.0
+            _ = filter.process(frame(Double(i) * 0.01,
+                                     [.init(id: 1, x: x, y: 0.5, phase: .moved)]))
+        }
+        // Motion stops; recency window (0.15 s) expires.
+        _ = filter.process(frame(0.30, [.init(id: 1, x: 0.54, y: 0.5, phase: .stationary)]))
+        let out = filter.process(frame(0.31, [
+            .init(id: 1, x: 0.54, y: 0.5, phase: .stationary),
+            .init(id: 2, x: 0.5, y: 0.6, phase: .began),
+        ]))
+        XCTAssertEqual(out?.touches.count, 2, "a lander after motion settles is a finger")
+        XCTAssertEqual(filter.state(of: 2), .finger)
+    }
+
     func testSuppressedTouchEndsSilently() {
         let filter = PalmFilter()
         XCTAssertNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.1, phase: .began)])))
@@ -142,7 +174,24 @@ final class PalmFilterTests: XCTestCase {
         let counts = beganCounts(filtered)
         let correct = counts[2, default: 0]
         let wrong = counts.filter { $0.key != 2 }.values.reduce(0, +)
-        XCTAssertGreaterThanOrEqual(correct, 15, "filtered 2-finger swipes")
-        XCTAssertLessThanOrEqual(wrong, 5, "filtered wrong-count swipes")
+        XCTAssertGreaterThanOrEqual(correct, 17, "filtered 2-finger swipes")
+        XCTAssertLessThanOrEqual(wrong, 3, "filtered wrong-count swipes")
+    }
+
+    /// Second palm session, recorded after the band rule shipped.
+    /// Unfiltered, the palm noise nearly kills recognition outright
+    /// (1 swipe in ~10 s). The residual wrong counts are palm patches
+    /// born mid-pad during quiet gaps between swipes - the mode no
+    /// birth-time rule can catch (docs/palm-rejection.md).
+    func testPalmSessionTwoAggregate() throws {
+        let file = FixtureSupport.palmFixturesDir.appendingPathComponent("palm-session-2.jsonl")
+        let unfiltered = try FixtureSupport.replay(file, palmFiltered: false)
+        XCTAssertLessThanOrEqual(beganCounts(unfiltered).values.reduce(0, +), 1,
+                                 "unfiltered, palm noise suppresses recognition almost entirely")
+        let filtered = try FixtureSupport.replay(file, palmFiltered: true)
+        let counts = beganCounts(filtered)
+        XCTAssertGreaterThanOrEqual(counts[2, default: 0], 10, "filtered 2-finger swipes")
+        XCTAssertLessThanOrEqual(counts.filter { $0.key != 2 }.values.reduce(0, +), 5,
+                                 "filtered wrong-count swipes")
     }
 }

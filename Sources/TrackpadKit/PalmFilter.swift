@@ -20,6 +20,12 @@ import CoreGraphics
 ///   progress with almost no reverse) is promoted to a finger and
 ///   enters the stream with a synthetic began. Palm smears drift and
 ///   jitter; they accumulate reverse motion and never qualify.
+/// - Landing time: gesture fingers all land before the motion starts
+///   (the recognizer's settle window models exactly that), so a touch
+///   born while established fingers are already in fast motion is a
+///   suspect wherever it lands - palm patches materialize mid-swipe,
+///   including well above any edge band. This is libinput's
+///   thumb-dropped-while-scrolling rule.
 ///
 /// States per touch: finger (passed through), pending (withheld,
 /// promotable), palm (withheld, sticky until lift). A pending touch
@@ -45,6 +51,14 @@ public final class PalmFilter {
         public var stationaryRadius: Double = 12.0
         public var stationaryTimeout: TimeInterval = 2.0
 
+        /// Late-lander rule: a touch born while an established finger
+        /// is in motion is a suspect regardless of position. A finger
+        /// counts as in motion once its path length reaches this many
+        /// device points (0 disables the rule)...
+        public var lateLanderMinFingerTravel: Double = 10.0
+        /// ...and its last movement is at most this recent.
+        public var lateLanderRecency: TimeInterval = 0.15
+
         public init() {}
     }
 
@@ -59,11 +73,16 @@ public final class PalmFilter {
         var origin: CGPoint
         var originTime: TimeInterval
         var last: CGPoint
+        var lastMoveTime: TimeInterval
         /// Per-axis sums of positive/negative deltas since birth, for
         /// the monotonic promotion test.
         var forward = CGVector.zero
         var reverse = CGVector.zero
         var stationary = true
+
+        var pathLength: Double {
+            forward.dx + reverse.dx + forward.dy + reverse.dy
+        }
     }
 
     private var touches: [Int: Tracked] = [:]
@@ -89,7 +108,8 @@ public final class PalmFilter {
             let p = CGPoint(x: sample.x * frame.w, y: sample.y * frame.h)
             switch sample.phase {
             case .began:
-                let suspect = config.bottomBand > 0 && sample.y < config.bottomBand
+                let suspect = (config.bottomBand > 0 && sample.y < config.bottomBand)
+                    || fingersInMotion(at: frame.t)
                 let state: TouchState = if !suspect {
                     .finger
                 } else if config.promotionTravel == nil {
@@ -98,7 +118,8 @@ public final class PalmFilter {
                     .pending
                 }
                 touches[sample.id] = Tracked(state: state, origin: p,
-                                             originTime: frame.t, last: p)
+                                             originTime: frame.t, last: p,
+                                             lastMoveTime: frame.t)
                 if state == .finger { out.append(sample) }
 
             case .ended, .cancelled:
@@ -112,7 +133,8 @@ public final class PalmFilter {
                     // Unknown id: the host attached mid-sequence. Treat
                     // as a finger - suspicion needs a birth position.
                     touches[sample.id] = Tracked(state: .finger, origin: p,
-                                                 originTime: frame.t, last: p)
+                                                 originTime: frame.t, last: p,
+                                                 lastMoveTime: frame.t)
                     out.append(sample)
                     continue
                 }
@@ -120,6 +142,7 @@ public final class PalmFilter {
                 let dy = p.y - tracked.last.y
                 if dx > 0 { tracked.forward.dx += dx } else { tracked.reverse.dx -= dx }
                 if dy > 0 { tracked.forward.dy += dy } else { tracked.reverse.dy -= dy }
+                if abs(dx) + abs(dy) >= 0.5 { tracked.lastMoveTime = frame.t }
                 tracked.last = p
 
                 switch tracked.state {
@@ -147,6 +170,17 @@ public final class PalmFilter {
         }
         guard !out.isEmpty else { return nil }
         return TouchFrame(t: frame.t, w: frame.w, h: frame.h, touches: out)
+    }
+
+    /// True when any established finger has traveled far enough and
+    /// moved recently enough that a landing right now is a late lander.
+    private func fingersInMotion(at now: TimeInterval) -> Bool {
+        guard config.lateLanderMinFingerTravel > 0 else { return false }
+        return touches.values.contains { tracked in
+            tracked.state == .finger
+                && tracked.pathLength >= config.lateLanderMinFingerTravel
+                && now - tracked.lastMoveTime <= config.lateLanderRecency
+        }
     }
 
     private func promotes(_ tracked: Tracked) -> Bool {

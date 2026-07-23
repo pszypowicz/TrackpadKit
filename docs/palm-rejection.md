@@ -134,19 +134,35 @@ host adapter -> PalmFilter -> TrackpadGestureRecognizer
 - Per-touch state machine keyed by id: `finger`, `pending`
   (quarantined suspect, withheld from output), `palm` (sticky,
   withheld for the contact's lifetime).
-- v1 heuristics, seeded from the sources above and local data:
-  - A touch born in the bottom band (default: lowest 15% of pad
-    height; local data shows zero intentional contacts there) enters
-    `pending` instead of `finger`.
-  - `pending` -> `finger`: monotonic travel past a threshold
-    (~~8 mm =~~ 23 device pt), or velocity tracking the established
-    finger set (correlated motion, per the Apple patent).
-  - `pending` -> `palm`: short life ending in the band, stationary
-    aging, or membership in a birth burst clustered with other
-    suspects.
-  - `palm` is sticky until lift.
-- All thresholds live in a `PalmFilter.Config` in device points,
-  tunable in the lab overlay like the recognizer's.
+- Shipped heuristics, seeded from the sources above and tuned against
+  the recorded sessions:
+  - Birth zone: a touch born in the bottom band (default: lowest 20%
+    of pad height; clean sessions never begin a touch below 0.26)
+    enters `pending` instead of `finger`.
+  - Late lander: a touch born while an established finger is in
+    motion (>= 10 pt of path, moved within the last 150 ms) enters
+    `pending` wherever it lands - libinput's
+    thumb-dropped-while-scrolling rule. Gesture fingers all land
+    before motion starts; palm patches materialize mid-swipe.
+  - `pending` -> `finger`: monotonic travel past a threshold (23
+    device pt one way with <= 1 pt reverse; wrongly promotes 1 of 112
+    recorded palm suspects, because palm smears jitter). Promotion
+    enters the stream as a synthetic began.
+  - `pending` -> `palm`: stationary within 12 pt of origin for 2 s.
+    `palm` is sticky until lift.
+- All thresholds live in a `PalmFilter.Config` in device points.
+- Measured effect (fixtures/palm/): session 1 unfiltered 0 of 10+
+  swipes lock 2 fingers, filtered 17 of 20; session 2 unfiltered
+  recognition nearly dead (1 swipe in 10 s), filtered 15 recognized,
+  10 correct.
+- Known residual mode, pinned in tests: palm patches born mid-pad
+  during quiet gaps BETWEEN swipes - no birth-time rule can catch them
+  (born above any viable band, with no finger motion at birth). The
+  candidate mechanisms, deliberately deferred until practice demands:
+  commit-time moving-subset (the gesture's finger count = touches that
+  moved since lock), or generalized stationary aging that demotes any
+  long-stationary touch to `pending` with a synthetic ended,
+  re-promotable by motion.
 - Optional future extension: hosts that read the private
   MultitouchSupport framework can stamp contact size into
   `TouchSample` (an optional field, like `resting`); the filter uses

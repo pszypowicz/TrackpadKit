@@ -179,18 +179,22 @@ mature input stack places ahead of gesture recognition:
 host adapter -> PalmFilter -> TrackpadGestureRecognizer
 ```
 
-A touch born in the bottom band (default: lowest 20% of the pad) is a
-suspect and is withheld from the stream; it is promoted to a finger
-only by deliberate monotonic travel (default 23 pt one way with at
-most 1 pt of reverse - palm smears jitter and never qualify), and a
-suspect that rests near its origin past a timeout becomes a palm for
-its whole lifetime. Hosts opt in by piping frames through
-`PalmFilter.process(_:)`; the recognizer is untouched.
+A touch born in the bottom band (default: lowest 20% of the pad), or
+born while an established finger is already in motion (the late-lander
+rule: gesture fingers land before motion starts, palm patches
+materialize mid-swipe), is a suspect and is withheld from the stream.
+A suspect is promoted to a finger only by deliberate monotonic travel
+(default 23 pt one way with at most 1 pt of reverse - palm smears
+jitter and never qualify), and one that rests near its origin past a
+timeout becomes a palm for its whole lifetime. Hosts opt in by piping
+frames through `PalmFilter.process(_:)`; the recognizer is untouched.
 
-Measured on a real palm-planted session (`fixtures/palm/`): unfiltered,
-1 of 13 swipes locked the correct finger count; filtered, 17 of 23 -
-with the remainder caused by palm contacts born above the band, the
-documented next target. Research and design rationale:
+Measured on real palm-planted sessions (`fixtures/palm/`): session 1
+unfiltered locked the correct finger count for 1 swipe of 13, filtered
+17 of 20; session 2 unfiltered barely recognized anything (1 swipe in
+10 s), filtered 15 with 10 correct. The residual wrong counts are palm
+patches born mid-pad during quiet gaps between swipes - the documented
+next target. Research and design rationale:
 [docs/palm-rejection.md](docs/palm-rejection.md).
 
 ## Record / replay
