@@ -20,6 +20,13 @@ final class TouchView: NSView {
     private var tickTimer: Timer?
     private var touchesEnabled = true
 
+    // Palm research: AppKit's resting-touch classification per live
+    // touch id, and how many resting-flagged touches were seen since
+    // the last counter reset. wantsRestingTouches starts false (the
+    // production default); [w] toggles it to see what AppKit hides.
+    private var restingByID: [Int: Bool] = [:]
+    private var restingSeenCount = 0
+
     // Coexistence instrumentation
     private var scrollLiveCount = 0
     private var scrollMomentumCount = 0
@@ -74,9 +81,14 @@ final class TouchView: NSView {
             let phase = Self.mapPhase(touch.phase)
             if phase == .ended || phase == .cancelled {
                 identityMap.removeValue(forKey: key)
+                restingByID.removeValue(forKey: id)
+            } else {
+                if touch.isResting && restingByID[id] != true { restingSeenCount += 1 }
+                restingByID[id] = touch.isResting
             }
             let p = touch.normalizedPosition
-            samples.append(TouchSample(id: id, x: p.x, y: p.y, phase: phase))
+            samples.append(TouchSample(id: id, x: p.x, y: p.y, phase: phase,
+                                       resting: touch.isResting))
         }
         let frame = TouchFrame(t: event.timestamp,
                                w: deviceSize.width, h: deviceSize.height,
@@ -112,6 +124,7 @@ final class TouchView: NSView {
             timer.invalidate()
             tickTimer = nil
             identityMap.removeAll()
+            restingByID.removeAll()
         }
     }
 
@@ -204,6 +217,7 @@ final class TouchView: NSView {
         case "r": toggleRecording()
         case "c": resetInstrumentation()
         case "t": toggleTouchDelivery()
+        case "w": toggleRestingTouches()
         case "s": recognizer.config.swipeCommitThreshold = max(1, recognizer.config.swipeCommitThreshold - 1)
         case "S": recognizer.config.swipeCommitThreshold += 1
         case "p": recognizer.config.pinchCommitThreshold = max(1, recognizer.config.pinchCommitThreshold - 1)
@@ -238,6 +252,13 @@ final class TouchView: NSView {
         log("allowedTouchTypes = \(touchesEnabled ? "[.indirect]" : "[] (touches off)")")
     }
 
+    private func toggleRestingTouches() {
+        wantsRestingTouches.toggle()
+        recognizer.reset()
+        restingByID.removeAll()
+        log("wantsRestingTouches = \(wantsRestingTouches)")
+    }
+
     private func resetInstrumentation() {
         scrollLiveCount = 0
         scrollMomentumCount = 0
@@ -250,6 +271,7 @@ final class TouchView: NSView {
         lastMagnifyInfo = "none yet"
         swipeAPICount = 0
         smartMagnifyCount = 0
+        restingSeenCount = 0
         log("counters reset")
     }
 
@@ -310,6 +332,10 @@ final class TouchView: NSView {
             drawText(String(format: "%.0f,%.0f", dot.device.x, dot.device.y),
                      at: CGPoint(x: p.x + radius + 4, y: p.y - 6),
                      font: Self.mono, color: Self.dim)
+            if restingByID[dot.id] == true {
+                drawText("R", at: CGPoint(x: p.x - 4, y: p.y - radius - 16),
+                         font: Self.monoBold, color: Self.bad)
+            }
         }
         if let c = snap.centroidNormalized {
             let p = viewPoint(normalized: c)
@@ -373,6 +399,9 @@ final class TouchView: NSView {
         lines.append((recLine, recorder.isRecording ? Self.bad : Self.dim))
         lines.append(("touch input \(touchesEnabled ? "[.indirect]" : "OFF") [t]",
                       touchesEnabled ? Self.dim : Self.bad))
+        let restingNow = restingByID.values.filter { $0 }.count
+        lines.append(("resting     wants \(wantsRestingTouches ? "ON" : "off") [w]   now \(restingNow)   seen \(restingSeenCount)",
+                      restingNow > 0 ? Self.warn : Self.dim))
         drawLines(lines, at: CGPoint(x: 16, y: 14))
     }
 
@@ -414,7 +443,7 @@ final class TouchView: NSView {
         for entry in eventLog.suffix(10) {
             lines.append((entry, entry.hasPrefix("ACTION") ? Self.good : Self.dim))
         }
-        lines.append(("keys: [r]ecord  [c]lear counters  [t]ouch delivery  [s/S] [p/P] thresholds", Self.dim))
+        lines.append(("keys: [r]ecord  [c]lear counters  [t]ouch delivery  [w]ants resting  [s/S] [p/P] thresholds", Self.dim))
         let lineHeight = Self.mono.pointSize + 4
         let y = bounds.height - CGFloat(lines.count) * lineHeight - 12
         drawLines(lines, at: CGPoint(x: 16, y: y))

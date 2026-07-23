@@ -49,6 +49,13 @@ enum Replay {
         print(String(format: "replayed %d frames over %.3fs from %@",
                      frames.count, frames.last!.t - t0, path))
         if !malformed.isEmpty { print("skipped \(malformed.count) malformed lines") }
+        let samples = frames.flatMap(\.touches)
+        let tagged = samples.filter { $0.resting != nil }
+        if !tagged.isEmpty {
+            let restingIDs = Set(tagged.filter { $0.resting == true }.map(\.id))
+            print("resting: \(tagged.filter { $0.resting == true }.count) of \(tagged.count) "
+                + "tagged samples, touch ids \(restingIDs.sorted())")
+        }
         if eventCounts.isEmpty {
             print("no gestures recognized")
         } else {

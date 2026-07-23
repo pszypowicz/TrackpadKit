@@ -53,12 +53,18 @@ public struct TouchSample: Codable {
     public var x: Double
     public var y: Double
     public var phase: TouchPhase
+    /// AppKit's resting-touch classification (NSTouch.isResting) when
+    /// the host captured it; nil when unknown (synthetic fixtures, old
+    /// recordings). Recorded for palm-rejection research; the
+    /// recognizer itself ignores it.
+    public var resting: Bool?
 
-    public init(id: Int, x: Double, y: Double, phase: TouchPhase) {
+    public init(id: Int, x: Double, y: Double, phase: TouchPhase, resting: Bool? = nil) {
         self.id = id
         self.x = x
         self.y = y
         self.phase = phase
+        self.resting = resting
     }
 }
 
