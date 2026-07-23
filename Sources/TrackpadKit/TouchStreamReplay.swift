@@ -12,7 +12,8 @@ public enum TouchStreamReplay {
         let decoder = JSONDecoder()
         var frames: [TouchFrame] = []
         var malformed: [Int] = []
-        for (index, line) in text.split(separator: "\n").enumerated() {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        for (index, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
             if let frame = try? decoder.decode(TouchFrame.self, from: Data(trimmed.utf8)) {
@@ -28,7 +29,10 @@ public enum TouchStreamReplay {
     /// synthetic clock at `tickHz` between them. A `palmFilter` slots in
     /// ahead of the recognizer exactly as in a live host. `onStep`
     /// observes the clock just before each step, for timestamped
-    /// logging.
+    /// logging. The clock runs one stale-frame timeout past the final
+    /// frame, so a stream truncated mid-gesture resolves (cancelling
+    /// any committed gesture) exactly as a live host that stopped
+    /// receiving events would.
     public static func run(frames: [TouchFrame],
                            recognizer: TrackpadGestureRecognizer,
                            tickHz: Double = 240,
@@ -45,9 +49,10 @@ public enum TouchStreamReplay {
             }
         }
         let step = 1.0 / tickHz
+        let end = last.t + recognizer.config.staleFrameTimeout + step
         var clock = first.t
         var i = 0
-        while clock <= last.t + step {
+        while clock <= end {
             onStep?(clock)
             while i < frames.count && frames[i].t <= clock {
                 feed(frames[i])
@@ -55,10 +60,6 @@ public enum TouchStreamReplay {
             }
             recognizer.tick(now: clock)
             clock += step
-        }
-        while i < frames.count {
-            feed(frames[i])
-            i += 1
         }
     }
 }
