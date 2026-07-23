@@ -6,6 +6,11 @@
 // replayable from disk and portable across a C boundary into another
 // apprt without changes.
 //
+// This file is kept identical with the standalone prototyping harness the
+// recognizer is developed and tuned in, whose live overlay and record and
+// replay tooling consume the DebugSnapshot API; hosts that don't visualize
+// simply don't call it.
+//
 // Model (mirrors Apple's LightTable/DualTouchTracker sample, not
 // NSGestureRecognizer - gesture recognizers do not receive trackpad
 // touches):
@@ -120,6 +125,14 @@ public final class TrackpadGestureRecognizer {
         public var swipeFingerCounts: ClosedRange<Int> = 2...4
         public var pinchFingerCounts: ClosedRange<Int> = 2...2
 
+        /// If no touch frame arrives for this long while a sequence is
+        /// active, the sequence is treated as abandoned and the recognizer
+        /// resets (emitting cancelled if a gesture was committed). This
+        /// recovers from hosts that stop delivering touch events
+        /// mid-sequence - e.g. when the gesture's own action switched the
+        /// view's window away and the remaining ended events never arrive.
+        public var staleFrameTimeout: TimeInterval = 0.4
+
         public init() {}
     }
 
@@ -153,6 +166,7 @@ public final class TrackpadGestureRecognizer {
     private var normalizedPoints: [Int: CGPoint] = [:]
     private var deviceSize = CGSize(width: 1, height: 1)
     private var lastCount = 0
+    private var lastFrameTime: TimeInterval = 0
 
     // Settling
     private var settleDeadline: TimeInterval = 0
@@ -182,6 +196,7 @@ public final class TrackpadGestureRecognizer {
 
     /// Feed one frame. Frames must arrive in timestamp order.
     public func process(_ frame: TouchFrame) {
+        lastFrameTime = frame.t
         deviceSize = CGSize(width: frame.w, height: frame.h)
         for s in frame.touches {
             switch s.phase {
@@ -203,9 +218,15 @@ public final class TrackpadGestureRecognizer {
     /// Drive time forward between frames. Live, call this from a timer
     /// while touches are down (stationary fingers stop producing touch
     /// events, but the settle timer still has to fire); on replay, step
-    /// it synthetically between frames. Only the settling state needs
-    /// time, so this never emits events.
+    /// it synthetically between frames.
     public func tick(now: TimeInterval) {
+        if state != .idle, now - lastFrameTime > config.staleFrameTimeout {
+            if case .committed(let kind, let fingers) = state {
+                emitFinal(kind: kind, fingers: fingers, phase: .cancelled, now: now)
+            }
+            reset()
+            return
+        }
         if case .settling = state { advance(now: now) }
     }
 
@@ -281,16 +302,25 @@ public final class TrackpadGestureRecognizer {
     }
 
     private func lock(now: TimeInterval, count: Int) {
-        baselineCentroid = centroid()
-        baselineSpread = spread(around: baselineCentroid)
-        lockTime = now
-        spreadHistory = [(now, baselineSpread)]
+        let c = centroid()
+        let s = spread(around: c)
         let canSwipe = config.swipeFingerCounts.contains(count)
-        let canPinch = config.pinchFingerCounts.contains(count) && baselineSpread > 1
+        let canPinch = config.pinchFingerCounts.contains(count) && s > 1
         guard canSwipe || canPinch else {
-            setState(.awaitingLift)
+            // A count that can't form any gesture (e.g. a single resting or
+            // moving finger) keeps settling rather than draining: a finger
+            // that lands later can still start a valid gesture, so this
+            // tolerates rest-then-add and landings staggered slower than
+            // the settle interval.
+            settleCount = count
+            settleDeadline = now + config.settleInterval
+            settleBaseline = c
             return
         }
+        baselineCentroid = c
+        baselineSpread = s
+        lockTime = now
+        spreadHistory = [(now, s)]
         setState(.locked(fingers: count))
     }
 
