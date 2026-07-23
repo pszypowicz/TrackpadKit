@@ -92,17 +92,20 @@ public final class PalmFilter {
     /// Current classification of a live touch (for host overlays).
     public func state(of id: Int) -> TouchState? { touches[id]?.state }
 
-    /// Live suspect count (for host overlays).
-    public var suppressedCount: Int {
-        touches.values.filter { $0.state != .finger }.count
-    }
-
     public func reset() { touches.removeAll() }
 
     /// Classify one frame. Returns the frame with suspect touches
     /// removed, or nil when no touches remain - hosts skip the
     /// recognizer for nil frames.
     public func process(_ frame: TouchFrame) -> TouchFrame? {
+        // A frame carries every live touch (the TouchFrame contract), so
+        // a tracked id absent from one is a touch whose ended was never
+        // delivered - the host stopped receiving events mid-sequence.
+        // Forget such phantoms: a later reuse of the id must not inherit
+        // their classification.
+        let live = Set(frame.touches.map(\.id))
+        touches = touches.filter { live.contains($0.key) }
+
         var out: [TouchSample] = []
         for sample in frame.touches {
             let p = CGPoint(x: sample.x * frame.w, y: sample.y * frame.h)
@@ -125,8 +128,11 @@ public final class PalmFilter {
                     // the current position as a birth estimate - a
                     // resting palm re-entering here must not become a
                     // finger just because its true landing wasn't seen.
-                    if let admitted = admit(sample, at: p, time: frame.t) {
-                        out.append(admitted)
+                    // Admission enters the stream as a synthetic began,
+                    // same as promotion: downstream sees a fresh landing.
+                    if admit(sample, at: p, time: frame.t) != nil {
+                        out.append(TouchSample(id: sample.id, x: sample.x, y: sample.y,
+                                               phase: .began, resting: sample.resting))
                     }
                     continue
                 }

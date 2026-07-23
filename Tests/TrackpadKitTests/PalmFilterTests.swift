@@ -79,8 +79,12 @@ final class PalmFilterTests: XCTestCase {
             XCTAssertNotNil(filter.process(frame(Double(i) * 0.01,
                                                  [.init(id: 1, x: x, y: 0.5, phase: .moved)])))
         }
-        let out = filter.process(frame(0.05, [.init(id: 2, x: 0.5, y: 0.6, phase: .began)]))
-        XCTAssertNil(out, "a touch landing during finger motion is a suspect")
+        let out = filter.process(frame(0.05, [
+            .init(id: 1, x: 0.54, y: 0.5, phase: .stationary),
+            .init(id: 2, x: 0.5, y: 0.6, phase: .began),
+        ]))
+        XCTAssertEqual(out?.touches.map(\.id), [1],
+                       "a touch landing during finger motion is a suspect")
         XCTAssertEqual(filter.state(of: 2), .pending)
     }
 
@@ -100,6 +104,39 @@ final class PalmFilterTests: XCTestCase {
         ]))
         XCTAssertEqual(out?.touches.count, 2, "a lander after motion settles is a finger")
         XCTAssertEqual(filter.state(of: 2), .finger)
+    }
+
+    func testBandDefinitiveWhenPromotionDisabled() {
+        let filter = PalmFilter()
+        filter.config.promotionTravel = nil
+        XCTAssertNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.1, phase: .began)])))
+        XCTAssertEqual(filter.state(of: 1), .palm)
+        // Even deliberate monotonic travel cannot promote.
+        for i in 1...6 {
+            let x = 0.5 + Double(i) * 5.0 / 400.0
+            XCTAssertNil(filter.process(frame(Double(i) * 0.01,
+                                              [.init(id: 1, x: x, y: 0.1, phase: .moved)])))
+        }
+        XCTAssertEqual(filter.state(of: 1), .palm)
+    }
+
+    func testPhantomTouchForgottenWhenAbsentFromFrame() {
+        let filter = PalmFilter()
+        XCTAssertNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.1, phase: .began)])))
+        XCTAssertEqual(filter.state(of: 1), .pending)
+        // Id 1's ended is never delivered (the host stopped receiving
+        // events); the next frame doesn't carry it, so it is forgotten.
+        let out = filter.process(frame(1.0, [.init(id: 2, x: 0.5, y: 0.5, phase: .began)]))
+        XCTAssertEqual(out?.touches.count, 1)
+        XCTAssertNil(filter.state(of: 1))
+        // A host reusing the id starts fresh instead of inheriting the
+        // phantom's classification.
+        let reused = filter.process(frame(1.1, [
+            .init(id: 2, x: 0.5, y: 0.5, phase: .stationary),
+            .init(id: 1, x: 0.5, y: 0.5, phase: .began),
+        ]))
+        XCTAssertEqual(reused?.touches.count, 2)
+        XCTAssertEqual(filter.state(of: 1), .finger)
     }
 
     func testSuppressedTouchEndsSilently() {
