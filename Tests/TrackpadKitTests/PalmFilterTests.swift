@@ -180,6 +180,9 @@ final class PalmFilterTests: XCTestCase {
         let filtered = try FixtureSupport.replay(file, palmFiltered: true)
         XCTAssertEqual(beganCounts(filtered), [2: 1])
         XCTAssertTrue(filtered.allSatisfy { $0.kind == .swipe && $0.direction == .left })
+        // The carved window ends with the touches still down, so the
+        // replay clock's run-out resolves the swipe as cancelled.
+        XCTAssertEqual(filtered.last?.phase, .cancelled)
     }
 
     /// A palm patch left over from before the episode enters mid-life
