@@ -145,14 +145,15 @@ final class PalmFilterTests: XCTestCase {
         XCTAssertTrue(filtered.allSatisfy { $0.kind == .swipe && $0.direction == .left })
     }
 
-    /// Known limitation, pinned: a long-lived palm contact born just
-    /// above the band still inflates the count. When an above-band
-    /// heuristic lands (docs/palm-rejection.md), this expectation
-    /// flips to [2: 1].
-    func testPalmAboveBandStillInflates() throws {
-        let file = FixtureSupport.palmFixturesDir.appendingPathComponent("palm-swipe-above-band.jsonl")
+    /// A palm patch left over from before the episode enters mid-life
+    /// (unknown id, no began sample) inside the band. Position-based
+    /// admission suppresses it and the swipe recovers its true count -
+    /// this fixture regressed to [3: 1] when unknown ids defaulted to
+    /// finger.
+    func testLeftoverPalmPatchSuppressed() throws {
+        let file = FixtureSupport.palmFixturesDir.appendingPathComponent("palm-swipe-leftover-patch.jsonl")
         let filtered = try FixtureSupport.replay(file, palmFiltered: true)
-        XCTAssertEqual(beganCounts(filtered), [3: 1])
+        XCTAssertEqual(beganCounts(filtered), [2: 1])
     }
 
     func testPalmLowNoiseSwipeUnharmed() throws {
