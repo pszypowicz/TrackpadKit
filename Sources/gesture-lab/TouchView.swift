@@ -1,10 +1,10 @@
 import AppKit
 import TrackpadKit
 
-/// The lab surface. Mirrors how Ghostty's surface view is set up
-/// (first responder, indirect touches, raw touch overrides plus real
-/// scrollWheel/magnify overrides) so the recognizer port is 1:1, and
-/// draws the live debug overlay on top.
+/// The lab surface and the package's reference host: set up the way a
+/// real app's view would be (first responder, indirect touches, raw
+/// touch overrides plus real scrollWheel/magnify overrides), and draws
+/// the live debug overlay on top.
 ///
 /// Event policy under test: the recognizer owns the raw NSTouch stream
 /// and is the only source of gesture actions. scrollWheel is treated
@@ -15,7 +15,7 @@ final class TouchView: NSView {
     let recognizer = TrackpadGestureRecognizer()
     let recorder = TouchRecorder()
     let palmFilter = PalmFilter()
-    private var palmFilterEnabled = true
+    private(set) var palmFilterEnabled = true
     /// Latest raw positions of suppressed touches, for the overlay -
     /// the recognizer never sees them, so they aren't in its snapshot.
     private var suppressedDots: [(id: Int, normalized: CGPoint)] = []
@@ -127,9 +127,9 @@ final class TouchView: NSView {
         return .stationary
     }
 
-    /// Stationary fingers stop producing touch events, but the settle
-    /// timer still needs to fire - drive the recognizer's clock while a
-    /// sequence is active. NSEvent.timestamp and systemUptime share a
+    /// Stationary fingers aren't guaranteed to keep producing touch
+    /// events, but the settle timer still needs to fire - drive the
+    /// recognizer's clock while a sequence is active. NSEvent.timestamp and systemUptime share a
     /// clock.
     private func syncTickTimer() {
         let active = recognizer.state != .idle

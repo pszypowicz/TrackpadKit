@@ -43,8 +43,8 @@ recognizer.onGesture = { event in
 Feed it from your view's raw touch overrides by adapting `NSTouch` to
 `TouchFrame` (map touch identities to small ints, keep
 `normalizedPosition` plus `deviceSize`), and drive time forward from a
-timer while touches are down - stationary fingers stop producing touch
-events, but the settle timer still has to fire:
+timer while touches are down - stationary fingers aren't guaranteed to
+keep producing touch events, but the settle timer still has to fire:
 
 ```swift
 recognizer.process(TouchFrame(t: event.timestamp, w: pad.width, h: pad.height,

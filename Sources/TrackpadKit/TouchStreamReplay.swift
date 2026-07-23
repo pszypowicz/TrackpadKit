@@ -38,6 +38,7 @@ public enum TouchStreamReplay {
                            tickHz: Double = 240,
                            palmFilter: PalmFilter? = nil,
                            onStep: ((TimeInterval) -> Void)? = nil) {
+        precondition(tickHz > 0, "tickHz must be positive")
         guard let first = frames.first, let last = frames.last else { return }
         let feed: (TouchFrame) -> Void = { frame in
             if let palmFilter {

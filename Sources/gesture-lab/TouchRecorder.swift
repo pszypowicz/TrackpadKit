@@ -20,7 +20,14 @@ final class TouchRecorder {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let url = dir.appendingPathComponent("rec-\(formatter.string(from: Date())).jsonl")
+        let stamp = formatter.string(from: Date())
+        // Recordings within the same second must not overwrite each other.
+        var url = dir.appendingPathComponent("rec-\(stamp).jsonl")
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = dir.appendingPathComponent("rec-\(stamp)-\(suffix).jsonl")
+            suffix += 1
+        }
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try FileHandle(forWritingTo: url)
         path = url.path
@@ -30,10 +37,16 @@ final class TouchRecorder {
     }
 
     func append(_ frame: TouchFrame) {
-        guard isRecording, let handle, let data = try? encoder.encode(frame) else { return }
-        handle.write(data)
-        handle.write(Data([0x0a]))
-        frameCount += 1
+        guard isRecording, let handle, var data = try? encoder.encode(frame) else { return }
+        data.append(0x0a)
+        do {
+            try handle.write(contentsOf: data)
+            frameCount += 1
+        } catch {
+            // The legacy write(_:) would crash on a full disk; stop the
+            // recording instead and leave what was captured intact.
+            stop()
+        }
     }
 
     func stop() {

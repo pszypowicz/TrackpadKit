@@ -86,7 +86,7 @@ def build_frames(args):
             return None
         if began_flag[0] == "done":
             return None
-        if t > transient_lift:
+        if t > transient_lift + 1e-9:
             began_flag[0] = "done"
             phase = "ended"
         elif began_flag[0] is None:
@@ -101,9 +101,11 @@ def build_frames(args):
     transient_state = [None]
     t = 0.0
     end_time = move_end
+    last_pos = None
     while t <= end_time + 1e-9:
         touches = []
         pos = positions(t)
+        last_pos = pos
         for i in range(n):
             if t + 1e-9 < land_time[i]:
                 continue
@@ -124,9 +126,10 @@ def build_frames(args):
                            "h": args.device_height, "touches": touches})
         t += dt
 
-    # Final frame: everyone still down lifts.
+    # Final frame: everyone still down lifts, at the position last
+    # reported (recomputing would re-roll jitter and teleport the lift).
     lift = []
-    final_pos = positions(end_time)
+    final_pos = last_pos if last_pos is not None else positions(end_time)
     for i in range(n):
         x, y = final_pos[i]
         lift.append({"id": i + 1, "x": x, "y": y, "phase": "ended"})
@@ -195,6 +198,18 @@ def main():
         parser.error("--transient-at must be >= 0")
     if args.transient_duration <= 0:
         parser.error("--transient-duration must be > 0")
+    if args.rate <= 0:
+        parser.error("--rate must be > 0")
+    if args.kind == "pinch" and args.scale_end <= 0:
+        parser.error("--scale-end must be > 0")
+
+    if args.transient_at is not None:
+        last_land = max(i * args.stagger for i in range(args.fingers))
+        end = last_land + args.hold + args.duration
+        if args.kind == "tap":
+            end = last_land + args.tap_hold
+        if args.transient_at > end:
+            parser.error("--transient-at is past the end of the stream")
 
     frames = build_frames(args)
     with open(args.output, "w", encoding="utf-8") as f:

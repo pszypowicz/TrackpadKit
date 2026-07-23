@@ -42,13 +42,13 @@ import CoreGraphics
 
 // MARK: - Input
 
-public enum TouchPhase: String, Codable {
+public enum TouchPhase: String, Codable, Sendable {
     case began, moved, stationary, ended, cancelled
 }
 
 /// One finger in one frame. x/y are normalized trackpad coordinates
 /// (0...1, origin bottom-left, y grows upward).
-public struct TouchSample: Codable {
+public struct TouchSample: Codable, Equatable, Sendable {
     public var id: Int
     public var x: Double
     public var y: Double
@@ -72,7 +72,7 @@ public struct TouchSample: Codable {
 /// that end in this frame. t is an arbitrary monotonic clock (NSEvent
 /// timestamps live; recorded values on replay) - only deltas matter.
 /// w/h are NSTouch.deviceSize in points.
-public struct TouchFrame: Codable {
+public struct TouchFrame: Codable, Equatable, Sendable {
     public var t: TimeInterval
     public var w: Double
     public var h: Double
@@ -89,10 +89,10 @@ public struct TouchFrame: Codable {
 // MARK: - Output
 
 /// Normalized gesture output, shaped to cross a C boundary untouched.
-public struct GestureEvent {
-    public enum Kind: String { case swipe, pinch }
-    public enum Direction: String { case left, right, up, down, none }
-    public enum Phase: String { case began, changed, ended, cancelled }
+public struct GestureEvent: Equatable, Sendable {
+    public enum Kind: String, Sendable { case swipe, pinch }
+    public enum Direction: String, Sendable { case left, right, up, down, none }
+    public enum Phase: String, Sendable { case began, changed, ended, cancelled }
 
     public var kind: Kind
     public var direction: Direction
@@ -119,6 +119,9 @@ public struct GestureEvent {
 
 // MARK: - Recognizer
 
+/// Not thread-safe: drive from a single queue (typically main).
+/// `config` may be mutated between frames; changes take effect on the
+/// next processed frame or tick.
 public final class TrackpadGestureRecognizer {
 
     public struct Config {
@@ -236,9 +239,9 @@ public final class TrackpadGestureRecognizer {
     }
 
     /// Drive time forward between frames. Live, call this from a timer
-    /// while touches are down (stationary fingers stop producing touch
-    /// events, but the settle timer still has to fire); on replay, step
-    /// it synthetically between frames.
+    /// while touches are down (stationary fingers aren't guaranteed to
+    /// keep producing touch events, but the settle timer still has to
+    /// fire); on replay, step it synthetically between frames.
     public func tick(now: TimeInterval) {
         if state != .idle, now - lastFrameTime > config.staleFrameTimeout {
             if case .committed(let kind, let fingers) = state {

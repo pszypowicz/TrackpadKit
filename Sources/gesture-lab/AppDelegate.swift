@@ -65,10 +65,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.directoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/recordings")
-        panel.beginSheetModal(for: window) { response in
+        panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            print("=== replaying \(url.path) ===")
-            _ = Replay.run(path: url.path, verbose: false)
+            // Match the live pipeline: replay through the palm filter
+            // when the lab has it enabled. Off-main - a long recording
+            // shouldn't freeze the window.
+            let filtered = self?.touchView.palmFilterEnabled ?? true
+            DispatchQueue.global(qos: .userInitiated).async {
+                print("=== replaying \(url.path)\(filtered ? " (palm-filtered)" : "") ===")
+                _ = Replay.run(path: url.path, verbose: false, palmFilter: filtered)
+            }
         }
     }
 }

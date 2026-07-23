@@ -31,6 +31,10 @@ import CoreGraphics
 /// promotable), palm (withheld, sticky until lift). A pending touch
 /// that sits near its origin past the stationary timeout becomes palm,
 /// so a late smear of a long-resting contact can no longer promote.
+///
+/// Not thread-safe: drive from a single queue (typically main).
+/// `config` may be mutated between frames; changes take effect on the
+/// next processed frame.
 public final class PalmFilter {
 
     public struct Config {
@@ -53,10 +57,14 @@ public final class PalmFilter {
 
         /// Late-lander rule: a touch born while an established finger
         /// is in motion is a suspect regardless of position. A finger
-        /// counts as in motion once its path length reaches this many
-        /// device points (0 disables the rule)...
+        /// counts as in motion once it accumulates this many device
+        /// points of travel without pausing longer than
+        /// `lateLanderRecency` (0 disables the rule) - lifetime travel
+        /// doesn't count, so a finger that swiped once and then rested
+        /// is not "in motion" when it later twitches.
         public var lateLanderMinFingerTravel: Double = 10.0
-        /// ...and its last movement is at most this recent.
+        /// Pause that ends a run of motion (and the maximum age of the
+        /// last movement for the finger to count as in motion).
         public var lateLanderRecency: TimeInterval = 0.15
 
         public init() {}
@@ -74,15 +82,14 @@ public final class PalmFilter {
         var originTime: TimeInterval
         var last: CGPoint
         var lastMoveTime: TimeInterval
+        /// Travel accumulated in the current run of motion; reset when
+        /// the touch pauses longer than the late-lander recency.
+        var recentTravel: Double = 0
         /// Per-axis sums of positive/negative deltas since birth, for
         /// the monotonic promotion test.
         var forward = CGVector.zero
         var reverse = CGVector.zero
         var stationary = true
-
-        var pathLength: Double {
-            forward.dx + reverse.dx + forward.dy + reverse.dy
-        }
     }
 
     private var touches: [Int: Tracked] = [:]
@@ -106,12 +113,18 @@ public final class PalmFilter {
         let live = Set(frame.touches.map(\.id))
         touches = touches.filter { live.contains($0.key) }
 
+        // Landing classification uses the motion state at frame start,
+        // so every landing in a frame sees the same answer regardless
+        // of sample order (live hosts deliver touches in set order).
+        let landingDuringMotion = fingersInMotion(at: frame.t)
+
         var out: [TouchSample] = []
         for sample in frame.touches {
             let p = CGPoint(x: sample.x * frame.w, y: sample.y * frame.h)
             switch sample.phase {
             case .began:
-                if let admitted = admit(sample, at: p, time: frame.t) {
+                if let admitted = admit(sample, at: p, time: frame.t,
+                                        duringMotion: landingDuringMotion) {
                     out.append(admitted)
                 }
 
@@ -130,7 +143,8 @@ public final class PalmFilter {
                     // finger just because its true landing wasn't seen.
                     // Admission enters the stream as a synthetic began,
                     // same as promotion: downstream sees a fresh landing.
-                    if admit(sample, at: p, time: frame.t) != nil {
+                    if admit(sample, at: p, time: frame.t,
+                             duringMotion: landingDuringMotion) != nil {
                         out.append(TouchSample(id: sample.id, x: sample.x, y: sample.y,
                                                phase: .began, resting: sample.resting))
                     }
@@ -140,6 +154,10 @@ public final class PalmFilter {
                 let dy = p.y - tracked.last.y
                 if dx > 0 { tracked.forward.dx += dx } else { tracked.reverse.dx -= dx }
                 if dy > 0 { tracked.forward.dy += dy } else { tracked.reverse.dy -= dy }
+                if frame.t - tracked.lastMoveTime > config.lateLanderRecency {
+                    tracked.recentTravel = 0
+                }
+                tracked.recentTravel += abs(dx) + abs(dy)
                 if abs(dx) + abs(dy) >= 0.5 { tracked.lastMoveTime = frame.t }
                 tracked.last = p
 
@@ -174,9 +192,9 @@ public final class PalmFilter {
     /// appearing mid-life) and track it. Returns the sample when it is
     /// admitted as a finger.
     private func admit(_ sample: TouchSample, at p: CGPoint,
-                       time: TimeInterval) -> TouchSample? {
+                       time: TimeInterval, duringMotion: Bool) -> TouchSample? {
         let suspect = (config.bottomBand > 0 && sample.y < config.bottomBand)
-            || fingersInMotion(at: time)
+            || duringMotion
         let state: TouchState = if !suspect {
             .finger
         } else if config.promotionTravel == nil {
@@ -190,13 +208,13 @@ public final class PalmFilter {
         return state == .finger ? sample : nil
     }
 
-    /// True when any established finger has traveled far enough and
-    /// moved recently enough that a landing right now is a late lander.
+    /// True when any established finger is in a current run of motion
+    /// long enough that a landing right now is a late lander.
     private func fingersInMotion(at now: TimeInterval) -> Bool {
         guard config.lateLanderMinFingerTravel > 0 else { return false }
         return touches.values.contains { tracked in
             tracked.state == .finger
-                && tracked.pathLength >= config.lateLanderMinFingerTravel
+                && tracked.recentTravel >= config.lateLanderMinFingerTravel
                 && now - tracked.lastMoveTime <= config.lateLanderRecency
         }
     }

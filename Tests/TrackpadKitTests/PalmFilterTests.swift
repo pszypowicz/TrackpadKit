@@ -88,6 +88,26 @@ final class PalmFilterTests: XCTestCase {
         XCTAssertEqual(filter.state(of: 2), .pending)
     }
 
+    func testLanderDuringRestedFingerTwitchIsFinger() {
+        let filter = PalmFilter()
+        XCTAssertNotNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.5, phase: .began)])))
+        // A full swipe's worth of lifetime travel...
+        for i in 1...10 {
+            let x = 0.5 + Double(i) * 4.0 / 400.0
+            _ = filter.process(frame(Double(i) * 0.01, [.init(id: 1, x: x, y: 0.5, phase: .moved)]))
+        }
+        // ...then a long rest, then a sub-point twitch right as a new
+        // finger lands. Lifetime travel must not make the twitch count
+        // as motion.
+        _ = filter.process(frame(1.0, [.init(id: 1, x: 0.6001, y: 0.5, phase: .moved)]))
+        let out = filter.process(frame(1.01, [
+            .init(id: 1, x: 0.6001, y: 0.5, phase: .stationary),
+            .init(id: 2, x: 0.5, y: 0.6, phase: .began),
+        ]))
+        XCTAssertEqual(out?.touches.count, 2, "rested finger's twitch is not motion")
+        XCTAssertEqual(filter.state(of: 2), .finger)
+    }
+
     func testLanderAfterMotionStopsIsFinger() {
         let filter = PalmFilter()
         XCTAssertNotNil(filter.process(frame(0, [.init(id: 1, x: 0.5, y: 0.5, phase: .began)])))
