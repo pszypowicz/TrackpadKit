@@ -15,21 +15,26 @@
 // NSGestureRecognizer - gesture recognizers do not receive trackpad
 // touches):
 //
-//   idle -> settling -> locked(N fingers) -> committed(swipe|pinch) -> idle
-//                                 \-> awaitingLift (drain) -----------/
+//   idle -> settling <-> locked(N fingers) -> committed(swipe|pinch) -> idle
+//                                                  \-> awaitingLift (drain) -/
 //
-// - settling: touches are landing; every added finger restarts a short
-//   settle timer so staggered landings still lock the intended count.
-//   Early motion locks immediately (a moving hand is done landing).
-// - locked: finger count is fixed. Both signals are measured from the
+// - settling: touches are landing; any finger-count change restarts a
+//   short settle timer, so staggered landings still lock the intended
+//   count and a transient graze (a thumb brushing the pad edge) leaves
+//   the surviving fingers as the candidate set. Early motion locks
+//   immediately (a moving hand is done landing).
+// - locked: the candidate count. Both signals are measured from the
 //   lock baseline: centroid translation (swipe) and mean distance from
 //   centroid (pinch spread). Whichever crosses its threshold first,
 //   with a dominance margin as hysteresis, captures the gesture for its
-//   whole lifetime (commit-and-lock mutual exclusion).
+//   whole lifetime (commit-and-lock mutual exclusion). A count change
+//   here re-settles rather than draining: nothing has been emitted
+//   yet, so there is no action to protect.
 // - committed: only the committed measure is reported. A lifted finger
 //   ends the gesture (with fling velocity from the recent history); an
 //   added finger cancels it. Either way we drain until all fingers are
-//   up before recognizing anything new.
+//   up before recognizing anything new - one action per physical
+//   gesture is the invariant awaitingLift exists to guarantee.
 //
 // Units: positions are normalizedPosition * deviceSize, i.e. device
 // points (1/72 in), so thresholds are trackpad-size independent.
@@ -255,22 +260,15 @@ public final class TrackpadGestureRecognizer {
 
         switch state {
         case .idle:
-            settleCount = count
-            settleDeadline = now + config.settleInterval
-            settleBaseline = centroid()
-            setState(.settling)
+            resettle(now: now, count: count)
 
         case .settling:
-            if count > settleCount {
-                settleCount = count
-                settleDeadline = now + config.settleInterval
-                settleBaseline = centroid()
-                return
-            }
-            if count < settleCount {
-                // A finger lifted before lock (tap or aborted landing) -
-                // drain rather than guess at intent.
-                setState(.awaitingLift)
+            if count != settleCount {
+                // Added fingers are still landing; a lifted finger (tap,
+                // aborted landing, transient graze) leaves the survivors
+                // as the candidate set. Either way, re-arm around the
+                // current touches.
+                resettle(now: now, count: count)
                 return
             }
             let moved = distance(centroid(), settleBaseline)
@@ -280,7 +278,13 @@ public final class TrackpadGestureRecognizer {
 
         case .locked(let fingers):
             if count != fingers {
-                setState(.awaitingLift)
+                // Pre-commit count change: a revised landing, not the end
+                // of a gesture - most commonly a thumb graze that joined
+                // the lock and lifted a beat later, with the real swipe
+                // still in flight. Nothing has been emitted, so there is
+                // nothing to drain; re-settle and let the survivors
+                // re-lock.
+                resettle(now: now, count: count)
                 return
             }
             evaluateCommit(now: now, fingers: fingers)
@@ -301,6 +305,17 @@ public final class TrackpadGestureRecognizer {
         }
     }
 
+    /// (Re)arm the settle window around the current touches. This is the
+    /// pre-commit answer to any finger-count change: the fresh baseline
+    /// absorbs the centroid jump from the changed touch set, and the
+    /// settle timer (or early motion) re-locks whatever remains.
+    private func resettle(now: TimeInterval, count: Int) {
+        settleCount = count
+        settleDeadline = now + config.settleInterval
+        settleBaseline = centroid()
+        setState(.settling)
+    }
+
     private func lock(now: TimeInterval, count: Int) {
         let c = centroid()
         let s = spread(around: c)
@@ -312,9 +327,7 @@ public final class TrackpadGestureRecognizer {
             // that lands later can still start a valid gesture, so this
             // tolerates rest-then-add and landings staggered slower than
             // the settle interval.
-            settleCount = count
-            settleDeadline = now + config.settleInterval
-            settleBaseline = c
+            resettle(now: now, count: count)
             return
         }
         baselineCentroid = c

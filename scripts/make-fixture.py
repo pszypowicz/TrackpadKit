@@ -73,7 +73,32 @@ def build_frames(args):
             pts[i] = (clamp(x), clamp(y))
         return pts
 
+    # Optional transient extra touch (a thumb grazing the pad edge): lands
+    # at --transient-at, sits stationary, lifts after --transient-duration.
+    transient_id = n + 1
+    transient_pos = (clamp(args.transient_x), clamp(args.transient_y))
+    transient_lift = None
+    if args.transient_at is not None:
+        transient_lift = args.transient_at + args.transient_duration
+
+    def transient_sample(t, began_flag):
+        if args.transient_at is None or t + 1e-9 < args.transient_at:
+            return None
+        if began_flag[0] == "done":
+            return None
+        if t > transient_lift:
+            began_flag[0] = "done"
+            phase = "ended"
+        elif began_flag[0] is None:
+            began_flag[0] = "down"
+            phase = "began"
+        else:
+            phase = "stationary"
+        return {"id": transient_id, "x": transient_pos[0],
+                "y": transient_pos[1], "phase": phase}
+
     began = set()
+    transient_state = [None]
     t = 0.0
     end_time = move_end
     while t <= end_time + 1e-9:
@@ -90,17 +115,23 @@ def build_frames(args):
             else:
                 phase = "moved"
             touches.append({"id": i + 1, "x": x, "y": y, "phase": phase})
+        sample = transient_sample(t, transient_state)
+        if sample:
+            touches.append(sample)
         if touches:
             frames.append({"t": t0 + t, "w": args.device_width,
                            "h": args.device_height, "touches": touches})
         t += dt
 
-    # Final frame: everyone lifts.
+    # Final frame: everyone still down lifts.
     lift = []
     final_pos = positions(end_time)
     for i in range(n):
         x, y = final_pos[i]
         lift.append({"id": i + 1, "x": x, "y": y, "phase": "ended"})
+    if transient_state[0] == "down":
+        lift.append({"id": transient_id, "x": transient_pos[0],
+                     "y": transient_pos[1], "phase": "ended"})
     frames.append({"t": t0 + end_time + dt, "w": args.device_width,
                    "h": args.device_height, "touches": lift})
     return frames
@@ -140,6 +171,16 @@ def main():
                         help="trackpad width in points (default: %(default)s)")
     parser.add_argument("--device-height", type=float, default=240.0,
                         help="trackpad height in points (default: %(default)s)")
+    parser.add_argument("--transient-at", type=float, default=None,
+                        help="extra transient touch (thumb graze): land time in "
+                             "seconds from first landing (default: none)")
+    parser.add_argument("--transient-duration", type=float, default=0.08,
+                        help="transient touch time on the pad, seconds "
+                             "(default: %(default)s)")
+    parser.add_argument("--transient-x", type=float, default=0.5,
+                        help="transient touch x, normalized (default: %(default)s)")
+    parser.add_argument("--transient-y", type=float, default=0.12,
+                        help="transient touch y, normalized (default: %(default)s)")
     parser.add_argument("--seed", type=int, default=42,
                         help="jitter RNG seed (default: %(default)s)")
     parser.add_argument("--output", required=True, help="output JSONL path")
@@ -149,6 +190,10 @@ def main():
         parser.error("--fingers must be >= 1")
     if args.kind == "swipe" and not 0 < args.travel <= 0.9:
         parser.error("--travel must be in (0, 0.9]")
+    if args.transient_at is not None and args.transient_at < 0:
+        parser.error("--transient-at must be >= 0")
+    if args.transient_duration <= 0:
+        parser.error("--transient-duration must be > 0")
 
     frames = build_frames(args)
     with open(args.output, "w", encoding="utf-8") as f:

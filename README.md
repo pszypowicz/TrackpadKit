@@ -144,6 +144,12 @@ thresholds:
   cross-commit), a 2-finger tap and a sub-threshold wander recognize
   nothing, and a 3-finger pinch is rejected because pinch only commits
   at 2 fingers.
+- Thumb graze (`--transient-at`): a transient extra touch that joins a
+  2-finger swipe and lifts before commit doesn't discard the swipe. If
+  it lifts during settling the count simply re-arms; if it already
+  locked as 3, the state trace recovers via settling -> locked(3) ->
+  settling -> locked(2) -> committed(swipe, 2). Pre-commit count
+  changes re-settle; only a committed gesture drains to awaitingLift.
 
 ### To confirm on hardware (needs a hand on the trackpad)
 
