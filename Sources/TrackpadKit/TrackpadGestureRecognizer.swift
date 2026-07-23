@@ -105,6 +105,16 @@ public struct GestureEvent {
     /// On .ended this is the fling velocity at lift (0 after a pause).
     public var velocity: Double
     public var phase: Phase
+
+    public init(kind: Kind, direction: Direction, fingerCount: Int,
+                magnitude: Double, velocity: Double, phase: Phase) {
+        self.kind = kind
+        self.direction = direction
+        self.fingerCount = fingerCount
+        self.magnitude = magnitude
+        self.velocity = velocity
+        self.phase = phase
+    }
 }
 
 // MARK: - Recognizer
@@ -130,7 +140,9 @@ public final class TrackpadGestureRecognizer {
         public var dominanceMargin: Double = 1.25
         /// Window for velocity estimation (and fling at lift).
         public var velocityWindow: TimeInterval = 0.1
-        /// Finger counts allowed to commit each gesture. 1 never locks.
+        /// Finger counts allowed to commit each gesture. A count in
+        /// neither range never locks; it keeps settling until the count
+        /// changes or every finger lifts.
         public var swipeFingerCounts: ClosedRange<Int> = 2...4
         public var pinchFingerCounts: ClosedRange<Int> = 2...2
 
@@ -174,7 +186,6 @@ public final class TrackpadGestureRecognizer {
     private var devicePoints: [Int: CGPoint] = [:]
     private var normalizedPoints: [Int: CGPoint] = [:]
     private var deviceSize = CGSize(width: 1, height: 1)
-    private var lastCount = 0
     private var lastFrameTime: TimeInterval = 0
 
     // Settling
@@ -243,7 +254,6 @@ public final class TrackpadGestureRecognizer {
         devicePoints.removeAll()
         normalizedPoints.removeAll()
         clearGestureState()
-        lastCount = 0
         setState(.idle)
     }
 
@@ -251,7 +261,6 @@ public final class TrackpadGestureRecognizer {
 
     private func advance(now: TimeInterval) {
         let count = devicePoints.count
-        defer { lastCount = count }
 
         if count == 0 {
             if case .committed(let kind, let fingers) = state {
