@@ -108,19 +108,9 @@ public final class PalmFilter {
             let p = CGPoint(x: sample.x * frame.w, y: sample.y * frame.h)
             switch sample.phase {
             case .began:
-                let suspect = (config.bottomBand > 0 && sample.y < config.bottomBand)
-                    || fingersInMotion(at: frame.t)
-                let state: TouchState = if !suspect {
-                    .finger
-                } else if config.promotionTravel == nil {
-                    .palm
-                } else {
-                    .pending
+                if let admitted = admit(sample, at: p, time: frame.t) {
+                    out.append(admitted)
                 }
-                touches[sample.id] = Tracked(state: state, origin: p,
-                                             originTime: frame.t, last: p,
-                                             lastMoveTime: frame.t)
-                if state == .finger { out.append(sample) }
 
             case .ended, .cancelled:
                 if let tracked = touches.removeValue(forKey: sample.id),
@@ -130,12 +120,14 @@ public final class PalmFilter {
 
             case .moved, .stationary:
                 guard var tracked = touches[sample.id] else {
-                    // Unknown id: the host attached mid-sequence. Treat
-                    // as a finger - suspicion needs a birth position.
-                    touches[sample.id] = Tracked(state: .finger, origin: p,
-                                                 originTime: frame.t, last: p,
-                                                 lastMoveTime: frame.t)
-                    out.append(sample)
+                    // Unknown id: the host attached mid-sequence or
+                    // remapped ids under a still-down hand. Classify by
+                    // the current position as a birth estimate - a
+                    // resting palm re-entering here must not become a
+                    // finger just because its true landing wasn't seen.
+                    if let admitted = admit(sample, at: p, time: frame.t) {
+                        out.append(admitted)
+                    }
                     continue
                 }
                 let dx = p.x - tracked.last.x
@@ -170,6 +162,26 @@ public final class PalmFilter {
         }
         guard !out.isEmpty else { return nil }
         return TouchFrame(t: frame.t, w: frame.w, h: frame.h, touches: out)
+    }
+
+    /// Classify a newly seen touch (a began sample, or an unknown id
+    /// appearing mid-life) and track it. Returns the sample when it is
+    /// admitted as a finger.
+    private func admit(_ sample: TouchSample, at p: CGPoint,
+                       time: TimeInterval) -> TouchSample? {
+        let suspect = (config.bottomBand > 0 && sample.y < config.bottomBand)
+            || fingersInMotion(at: time)
+        let state: TouchState = if !suspect {
+            .finger
+        } else if config.promotionTravel == nil {
+            .palm
+        } else {
+            .pending
+        }
+        touches[sample.id] = Tracked(state: state, origin: p,
+                                     originTime: time, last: p,
+                                     lastMoveTime: time)
+        return state == .finger ? sample : nil
     }
 
     /// True when any established finger has traveled far enough and
