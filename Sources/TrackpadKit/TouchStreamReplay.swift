@@ -25,27 +25,39 @@ public enum TouchStreamReplay {
     }
 
     /// Feed frames through the recognizer in timestamp order, ticking a
-    /// synthetic clock at `tickHz` between them. `onStep` observes the
-    /// clock just before each step, for timestamped logging.
+    /// synthetic clock at `tickHz` between them. A `palmFilter` slots in
+    /// ahead of the recognizer exactly as in a live host. `onStep`
+    /// observes the clock just before each step, for timestamped
+    /// logging.
     public static func run(frames: [TouchFrame],
                            recognizer: TrackpadGestureRecognizer,
                            tickHz: Double = 240,
+                           palmFilter: PalmFilter? = nil,
                            onStep: ((TimeInterval) -> Void)? = nil) {
         guard let first = frames.first, let last = frames.last else { return }
+        let feed: (TouchFrame) -> Void = { frame in
+            if let palmFilter {
+                if let filtered = palmFilter.process(frame) {
+                    recognizer.process(filtered)
+                }
+            } else {
+                recognizer.process(frame)
+            }
+        }
         let step = 1.0 / tickHz
         var clock = first.t
         var i = 0
         while clock <= last.t + step {
             onStep?(clock)
             while i < frames.count && frames[i].t <= clock {
-                recognizer.process(frames[i])
+                feed(frames[i])
                 i += 1
             }
             recognizer.tick(now: clock)
             clock += step
         }
         while i < frames.count {
-            recognizer.process(frames[i])
+            feed(frames[i])
             i += 1
         }
     }

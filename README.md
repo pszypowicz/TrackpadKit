@@ -65,6 +65,7 @@ swift build
 swift run gesture-lab                 # interactive lab window
 swift run gesture-lab --replay fixtures/swipe-left-3f.jsonl
 swift run gesture-lab --replay fixtures/swipe-left-3f.jsonl --verbose
+swift run gesture-lab --replay recordings/rec.jsonl --palm-filter
 swift test                            # replay every fixture, assert outcomes
 ```
 
@@ -80,6 +81,8 @@ under the cursor, so keep the pointer inside the window while gesturing.
 | `r` (or Cmd+R) | start/stop recording to `recordings/*.jsonl`              |
 | `c`            | reset the OS-event counters                               |
 | `t`            | toggle `allowedTouchTypes` between `[.indirect]` and `[]` |
+| `w`            | toggle `wantsRestingTouches` (see resting research)       |
+| `f`            | toggle the PalmFilter stage                               |
 | `s` / `S`      | swipe commit threshold down / up                          |
 | `p` / `P`      | pinch commit threshold down / up                          |
 | Cmd+O          | replay a recording (prints to the terminal)               |
@@ -89,6 +92,8 @@ under the cursor, so keep the pointer inside the window while gesturing.
 - `Sources/TrackpadKit/TrackpadGestureRecognizer.swift` - the engine.
   Depends only on Foundation and CoreGraphics, never sees
   `NSTouch`/`NSEvent`.
+- `Sources/TrackpadKit/PalmFilter.swift` - per-touch palm
+  classification ahead of the recognizer (see Palm rejection below).
 - `Sources/TrackpadKit/TouchStreamReplay.swift` - JSONL parsing and the
   deterministic replay clock shared by the CLI and the tests.
 - `Sources/gesture-lab/TouchView.swift` - the lab surface and reference
@@ -96,11 +101,15 @@ under the cursor, so keep the pointer inside the window while gesturing.
 - `Sources/gesture-lab/Replay.swift` - the `--replay` CLI printer.
 - `Sources/gesture-lab/TouchRecorder.swift` - JSONL frame recorder.
   Recordings land in `recordings/` (created on demand, gitignored).
-- `Tests/TrackpadKitTests/ReplayFixtureTests.swift` - replays every
-  fixture and asserts kind, direction, finger count, and magnitudes; a
-  fixture without an expectation entry fails the suite.
+- `Tests/TrackpadKitTests/` - replays every fixture and asserts the
+  outcomes; a fixture without an expectation entry fails the suite.
+  `fixtures/palm/` holds windows carved from real palm-planted
+  recordings for the PalmFilter regression tests.
 - `scripts/make-fixture.py` - synthetic gesture generator (see
   `--help`).
+- `docs/palm-rejection.md` - the research (platform APIs, open-source
+  stacks, literature, local measurements) behind the PalmFilter
+  design.
 
 ## Recognizer model
 
@@ -157,6 +166,32 @@ All in `TrackpadGestureRecognizer.Config`, live-tunable in the overlay:
 | `swipeFingerCounts`    | 2...4   | counts allowed to commit a swipe                                 |
 | `pinchFingerCounts`    | 2...2   | counts allowed to commit a pinch                                 |
 | `staleFrameTimeout`    | 400 ms  | frame gap that abandons a sequence (host stopped delivering)     |
+
+## Palm rejection
+
+macOS exposes no contact size, pressure, or reliable resting flag for
+trackpad touches, so a palm arrives as ordinary touches - typically a
+churn of short-lived contacts near the pad's bottom edge that inflate
+the finger count. `PalmFilter` is the classification stage every
+mature input stack places ahead of gesture recognition:
+
+```
+host adapter -> PalmFilter -> TrackpadGestureRecognizer
+```
+
+A touch born in the bottom band (default: lowest 20% of the pad) is a
+suspect and is withheld from the stream; it is promoted to a finger
+only by deliberate monotonic travel (default 23 pt one way with at
+most 1 pt of reverse - palm smears jitter and never qualify), and a
+suspect that rests near its origin past a timeout becomes a palm for
+its whole lifetime. Hosts opt in by piping frames through
+`PalmFilter.process(_:)`; the recognizer is untouched.
+
+Measured on a real palm-planted session (`fixtures/palm/`): unfiltered,
+1 of 13 swipes locked the correct finger count; filtered, 17 of 23 -
+with the remainder caused by palm contacts born above the band, the
+documented next target. Research and design rationale:
+[docs/palm-rejection.md](docs/palm-rejection.md).
 
 ## Record / replay
 

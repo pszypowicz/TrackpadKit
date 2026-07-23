@@ -1,10 +1,12 @@
 import AppKit
 
 let usage = """
-usage: gesture-lab [--replay <file.jsonl>] [--verbose]
+usage: gesture-lab [--replay <file.jsonl>] [--palm-filter] [--verbose]
 
   --replay <file>   replay a recorded touch stream through the recognizer
                     headless, print recognized gestures, and exit
+  --palm-filter     with --replay: pipe frames through the PalmFilter
+                    stage before the recognizer, as a live host would
   --verbose         with --replay: also print changed events and state
                     transitions
   -h, --help        show this help
@@ -14,6 +16,7 @@ With no arguments, opens the interactive gesture lab window.
 
 var replayPath: String?
 var verbose = false
+var palmFilter = false
 var argIndex = 1
 let argv = CommandLine.arguments
 while argIndex < argv.count {
@@ -27,6 +30,8 @@ while argIndex < argv.count {
         replayPath = argv[argIndex]
     case "--verbose":
         verbose = true
+    case "--palm-filter":
+        palmFilter = true
     case "--help", "-h":
         print(usage)
         exit(0)
@@ -38,7 +43,7 @@ while argIndex < argv.count {
 }
 
 if let replayPath {
-    exit(Replay.run(path: replayPath, verbose: verbose))
+    exit(Replay.run(path: replayPath, verbose: verbose, palmFilter: palmFilter))
 }
 
 let app = NSApplication.shared

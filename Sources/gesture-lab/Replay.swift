@@ -5,7 +5,7 @@ import TrackpadKit
 /// stream through a fresh recognizer via `TouchStreamReplay` and prints
 /// what it recognizes.
 enum Replay {
-    static func run(path: String, verbose: Bool) -> Int32 {
+    static func run(path: String, verbose: Bool, palmFilter: Bool = false) -> Int32 {
         guard let data = FileManager.default.contents(atPath: path),
               let text = String(data: data, encoding: .utf8) else {
             fputs("replay: cannot read \(path)\n", stderr)
@@ -43,7 +43,9 @@ enum Replay {
             }
         }
 
-        TouchStreamReplay.run(frames: frames, recognizer: recognizer) { clock = $0 }
+        let filter = palmFilter ? PalmFilter() : nil
+        TouchStreamReplay.run(frames: frames, recognizer: recognizer,
+                              palmFilter: filter) { clock = $0 }
 
         print("---")
         print(String(format: "replayed %d frames over %.3fs from %@",

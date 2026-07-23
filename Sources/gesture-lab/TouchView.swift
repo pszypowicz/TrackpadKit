@@ -14,6 +14,11 @@ import TrackpadKit
 final class TouchView: NSView {
     let recognizer = TrackpadGestureRecognizer()
     let recorder = TouchRecorder()
+    let palmFilter = PalmFilter()
+    private var palmFilterEnabled = true
+    /// Latest raw positions of suppressed touches, for the overlay -
+    /// the recognizer never sees them, so they aren't in its snapshot.
+    private var suppressedDots: [(id: Int, normalized: CGPoint)] = []
 
     private var identityMap: [NSObject: Int] = [:]
     private var nextTouchID = 1
@@ -93,8 +98,23 @@ final class TouchView: NSView {
         let frame = TouchFrame(t: event.timestamp,
                                w: deviceSize.width, h: deviceSize.height,
                                touches: samples)
+        // Recordings stay raw: the filter is under test, its input is
+        // the research artifact.
         if recorder.isRecording { recorder.append(frame) }
-        recognizer.process(frame)
+        if palmFilterEnabled {
+            if let filtered = palmFilter.process(frame) {
+                recognizer.process(filtered)
+            }
+            suppressedDots = samples.compactMap { s in
+                guard s.phase != .ended, s.phase != .cancelled,
+                      let state = palmFilter.state(of: s.id), state != .finger
+                else { return nil }
+                return (s.id, CGPoint(x: s.x, y: s.y))
+            }
+        } else {
+            recognizer.process(frame)
+            suppressedDots = []
+        }
         syncTickTimer()
         needsDisplay = true
     }
@@ -125,6 +145,10 @@ final class TouchView: NSView {
             tickTimer = nil
             identityMap.removeAll()
             restingByID.removeAll()
+            // Suspects lift without the recognizer going active, so an
+            // idle recognizer doesn't imply an empty filter; only clear
+            // leftovers once the raw pad is empty too.
+            if suppressedDots.isEmpty { palmFilter.reset() }
         }
     }
 
@@ -218,6 +242,7 @@ final class TouchView: NSView {
         case "c": resetInstrumentation()
         case "t": toggleTouchDelivery()
         case "w": toggleRestingTouches()
+        case "f": togglePalmFilter()
         case "s": recognizer.config.swipeCommitThreshold = max(1, recognizer.config.swipeCommitThreshold - 1)
         case "S": recognizer.config.swipeCommitThreshold += 1
         case "p": recognizer.config.pinchCommitThreshold = max(1, recognizer.config.pinchCommitThreshold - 1)
@@ -257,6 +282,14 @@ final class TouchView: NSView {
         recognizer.reset()
         restingByID.removeAll()
         log("wantsRestingTouches = \(wantsRestingTouches)")
+    }
+
+    private func togglePalmFilter() {
+        palmFilterEnabled.toggle()
+        palmFilter.reset()
+        recognizer.reset()
+        suppressedDots = []
+        log("palm filter = \(palmFilterEnabled ? "on" : "off")")
     }
 
     private func resetInstrumentation() {
@@ -337,6 +370,19 @@ final class TouchView: NSView {
                          font: Self.monoBold, color: Self.bad)
             }
         }
+        for dot in suppressedDots {
+            let p = viewPoint(normalized: dot.normalized)
+            let radius: CGFloat = 18
+            let circle = NSBezierPath(ovalIn: NSRect(x: p.x - radius, y: p.y - radius,
+                                                     width: radius * 2, height: radius * 2))
+            Self.bad.withAlphaComponent(0.6).setStroke()
+            circle.lineWidth = 2
+            circle.setLineDash([4, 4], count: 2, phase: 0)
+            circle.stroke()
+            let label = palmFilter.state(of: dot.id) == .palm ? "palm" : "pend"
+            drawText(label, at: CGPoint(x: p.x - 14, y: p.y - 8),
+                     font: Self.monoBold, color: Self.bad)
+        }
         if let c = snap.centroidNormalized {
             let p = viewPoint(normalized: c)
             let cross = NSBezierPath()
@@ -402,6 +448,12 @@ final class TouchView: NSView {
         let restingNow = restingByID.values.filter { $0 }.count
         lines.append(("resting     wants \(wantsRestingTouches ? "ON" : "off") [w]   now \(restingNow)   seen \(restingSeenCount)",
                       restingNow > 0 ? Self.warn : Self.dim))
+        let bandPct = Int(palmFilter.config.bottomBand * 100)
+        let filterLine = palmFilterEnabled
+            ? "palm-filter ON [f]   band \(bandPct)%   suppressed \(suppressedDots.count)"
+            : "palm-filter off [f]"
+        lines.append((filterLine,
+                      suppressedDots.isEmpty ? Self.dim : Self.warn))
         drawLines(lines, at: CGPoint(x: 16, y: 14))
     }
 
@@ -443,7 +495,7 @@ final class TouchView: NSView {
         for entry in eventLog.suffix(10) {
             lines.append((entry, entry.hasPrefix("ACTION") ? Self.good : Self.dim))
         }
-        lines.append(("keys: [r]ecord  [c]lear counters  [t]ouch delivery  [w]ants resting  [s/S] [p/P] thresholds", Self.dim))
+        lines.append(("keys: [r]ecord  [c]lear counters  [t]ouch delivery  [w]ants resting  [f]ilter palms  [s/S] [p/P] thresholds", Self.dim))
         let lineHeight = Self.mono.pointSize + 4
         let y = bounds.height - CGFloat(lines.count) * lineHeight - 12
         drawLines(lines, at: CGPoint(x: 16, y: y))
