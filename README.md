@@ -179,23 +179,20 @@ mature input stack places ahead of gesture recognition:
 host adapter -> PalmFilter -> TrackpadGestureRecognizer
 ```
 
-A touch born in the bottom band (default: lowest 20% of the pad), or
-born while an established finger is already in motion (the late-lander
-rule: gesture fingers land before motion starts, palm patches
-materialize mid-swipe), is a suspect and is withheld from the stream.
-A suspect is promoted to a finger only by deliberate monotonic travel
-(default 23 pt one way with at most 1 pt of reverse - palm smears
-jitter and never qualify), and one that rests near its origin past a
-timeout becomes a palm for its whole lifetime. Hosts opt in by piping
-frames through `PalmFilter.process(_:)`; the recognizer is untouched.
+A touch is a suspect if it is born in the bottom band (default: lowest
+20% of the pad) or while an established finger is already in motion
+(the late-lander rule: gesture fingers land before motion starts, palm
+patches materialize mid-swipe). Suspects are withheld from the stream;
+one is promoted to a finger only by deliberate monotonic travel (palm
+smears jitter and never qualify), and one that rests near its origin
+past a timeout becomes a palm for its whole lifetime. Hosts opt in by
+piping frames through `PalmFilter.process(_:)`; the recognizer is
+untouched.
 
-Measured on real palm-planted sessions (`fixtures/palm/`): session 1
-unfiltered locked the correct finger count for 1 swipe of 13, filtered
-17 of 20; session 2 unfiltered barely recognized anything (1 swipe in
-10 s), filtered 15 with 10 correct. The residual wrong counts are palm
-patches born mid-pad during quiet gaps between swipes - the documented
-next target. Research and design rationale:
-[docs/palm-rejection.md](docs/palm-rejection.md).
+Not handled (yet): palm patches born mid-pad during quiet gaps between
+gestures - above any viable band, with no finger motion at birth.
+Candidate mechanisms, and the research and measurements behind the
+current design: [docs/palm-rejection.md](docs/palm-rejection.md).
 
 ## Record / replay
 
@@ -218,27 +215,9 @@ fixture tests (`swift test`) pin this down in CI.
 
 ## Findings
 
-### Verified by deterministic replay (synthetic fixtures)
-
-All of `fixtures/` replays to the expected result with the default
-thresholds (asserted by `swift test`):
-
-- 3-finger left, 2-finger up, 4-finger right swipes: correct kind,
-  direction, and count; fling velocity matches the synthetic motion
-  (e.g. 100 pt over 0.25 s reports ~400 pt/s).
-- Staggered 3-finger landing (30 ms apart, with jitter) still locks 3
-  and swipes; state trace is settling -> locked(3) -> committed(swipe)
-  -> idle.
-- Pinch out/in: scale 1.58 / 0.61 with signed velocity.
-- Noisy pinch stays a pinch, noisy swipe stays a swipe (no
-  cross-commit), a 2-finger tap and a sub-threshold wander recognize
-  nothing, and a 3-finger pinch is rejected because pinch only commits
-  at 2 fingers.
-- Transient graze (`--transient-at`): an extra contact (thumb or palm)
-  that joins a 2-finger swipe and lifts before commit doesn't discard
-  the swipe. If it lifts during settling the count simply re-arms; if
-  it already locked as 3, the state trace recovers via settling ->
-  locked(3) -> settling -> locked(2) -> committed(swipe, 2).
+Recognizer and PalmFilter behavior is asserted by deterministic replay
+in `swift test` - the expectation tables in `Tests/TrackpadKitTests/`
+are the authoritative record of what each fixture must produce.
 
 ### To confirm on hardware (needs a hand on the trackpad)
 
