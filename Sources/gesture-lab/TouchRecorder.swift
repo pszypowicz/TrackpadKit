@@ -18,6 +18,7 @@ final class TouchRecorder {
         let dir = URL(fileURLWithPath: directory)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
         let url = dir.appendingPathComponent("rec-\(formatter.string(from: Date())).jsonl")
         FileManager.default.createFile(atPath: url.path, contents: nil)

@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
@@ -58,7 +59,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func replayRecording(_ sender: Any?) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = []
+        if let jsonl = UTType(filenameExtension: "jsonl") {
+            panel.allowedContentTypes = [jsonl]
+        }
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.directoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/recordings")
