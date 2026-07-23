@@ -103,10 +103,11 @@ def build_frames(args):
     end_time = move_end
     while t <= end_time + 1e-9:
         touches = []
+        pos = positions(t)
         for i in range(n):
             if t + 1e-9 < land_time[i]:
                 continue
-            x, y = positions(t)[i]
+            x, y = pos[i]
             if i not in began:
                 phase = "began"
                 began.add(i)

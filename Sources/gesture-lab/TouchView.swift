@@ -143,6 +143,11 @@ final class TouchView: NSView {
         } else if !active, let timer = tickTimer {
             timer.invalidate()
             tickTimer = nil
+            // After a stale-timeout reset, fingers can still be down with
+            // no events arriving; clearing here re-keys them under fresh
+            // ids at the next event. Downstream absorbs that (the filter
+            // re-admits unknown ids by position), but recordings capture
+            // the same mid-life id swap the leftover-patch fixture pins.
             identityMap.removeAll()
             restingByID.removeAll()
             // Suspects lift without the recognizer going active, so an
@@ -274,12 +279,16 @@ final class TouchView: NSView {
         touchesEnabled.toggle()
         allowedTouchTypes = touchesEnabled ? [.indirect] : []
         recognizer.reset()
+        palmFilter.reset()
+        suppressedDots = []
         log("allowedTouchTypes = \(touchesEnabled ? "[.indirect]" : "[] (touches off)")")
     }
 
     private func toggleRestingTouches() {
         wantsRestingTouches.toggle()
         recognizer.reset()
+        palmFilter.reset()
+        suppressedDots = []
         restingByID.removeAll()
         log("wantsRestingTouches = \(wantsRestingTouches)")
     }
