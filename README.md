@@ -257,7 +257,6 @@ designed to produce, in priority order:
   8 pt of spread change. Matching the OS exactly would mean committing
   earlier and risking swipe misclassification - the dominance margin is
   the compromise, and the A/B line exists to tune it by feel.
-- No rotation, by design.
 - `smartMagnify:` (two-finger double-tap) has no raw-touch equivalent
   worth building; the two taps are trivial to see in the touch stream,
   but the OS timing/slop heuristics are opaque, so keep using the
