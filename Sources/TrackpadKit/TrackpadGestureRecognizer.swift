@@ -184,10 +184,17 @@ public final class TrackpadGestureRecognizer {
     public private(set) var state: State = .idle
     public private(set) var lastEvent: GestureEvent?
 
-    // Active touches, device points and normalized (normalized kept only
-    // for visualization).
-    private var devicePoints: [Int: CGPoint] = [:]
-    private var normalizedPoints: [Int: CGPoint] = [:]
+    // Active touches in landing order, linearly scanned by id:
+    // concurrent touches never exceed a hand's worth, host ids grow
+    // without reuse (so id-indexing is out), and the stable iteration
+    // order keeps the centroid/spread sums - and therefore replay -
+    // deterministic. normalized is kept only for visualization.
+    private struct ActiveTouch {
+        var id: Int
+        var device: CGPoint
+        var normalized: CGPoint
+    }
+    private var activeTouches: [ActiveTouch] = []
     private var deviceSize = CGSize(width: 1, height: 1)
     private var lastFrameTime: TimeInterval = 0
 
@@ -213,7 +220,15 @@ public final class TrackpadGestureRecognizer {
     private var spreadHistory: [(t: TimeInterval, v: Double)] = []
     private var measureHistory: [(t: TimeInterval, v: Double)] = []
 
-    public init() {}
+    public init() {
+        // Capacities cover a full hand and 0.5 s of history at high
+        // frame rates; with removeAll(keepingCapacity:) everywhere,
+        // steady-state frames never allocate.
+        activeTouches.reserveCapacity(16)
+        centroidHistory.reserveCapacity(128)
+        spreadHistory.reserveCapacity(128)
+        measureHistory.reserveCapacity(128)
+    }
 
     // MARK: Driving
 
@@ -222,16 +237,18 @@ public final class TrackpadGestureRecognizer {
         lastFrameTime = frame.t
         deviceSize = CGSize(width: frame.w, height: frame.h)
         for s in frame.touches {
+            let idx = activeTouches.firstIndex { $0.id == s.id }
             switch s.phase {
             case .ended, .cancelled:
-                devicePoints.removeValue(forKey: s.id)
-                normalizedPoints.removeValue(forKey: s.id)
+                if let idx { activeTouches.remove(at: idx) }
             default:
-                devicePoints[s.id] = CGPoint(x: s.x * frame.w, y: s.y * frame.h)
-                normalizedPoints[s.id] = CGPoint(x: s.x, y: s.y)
+                let touch = ActiveTouch(id: s.id,
+                                        device: CGPoint(x: s.x * frame.w, y: s.y * frame.h),
+                                        normalized: CGPoint(x: s.x, y: s.y))
+                if let idx { activeTouches[idx] = touch } else { activeTouches.append(touch) }
             }
         }
-        if !devicePoints.isEmpty {
+        if !activeTouches.isEmpty {
             centroidHistory.append((frame.t, centroid()))
             trim(&centroidHistory, now: frame.t)
         }
@@ -254,8 +271,7 @@ public final class TrackpadGestureRecognizer {
     }
 
     public func reset() {
-        devicePoints.removeAll()
-        normalizedPoints.removeAll()
+        activeTouches.removeAll(keepingCapacity: true)
         clearGestureState()
         setState(.idle)
     }
@@ -263,7 +279,7 @@ public final class TrackpadGestureRecognizer {
     // MARK: State machine
 
     private func advance(now: TimeInterval) {
-        let count = devicePoints.count
+        let count = activeTouches.count
 
         if count == 0 {
             if case .committed(let kind, let fingers) = state {
@@ -349,7 +365,8 @@ public final class TrackpadGestureRecognizer {
         baselineCentroid = c
         baselineSpread = s
         lockTime = now
-        spreadHistory = [(now, s)]
+        spreadHistory.removeAll(keepingCapacity: true)
+        spreadHistory.append((now, s))
         setState(.locked(fingers: count))
     }
 
@@ -389,9 +406,10 @@ public final class TrackpadGestureRecognizer {
         // Seed the measure history from the centroid track since lock, so
         // a fast flick that commits and lifts within a few frames still
         // gets a real fling velocity.
-        measureHistory = centroidHistory
-            .filter { $0.t >= lockTime }
-            .map { ($0.t, project($0.v)) }
+        measureHistory.removeAll(keepingCapacity: true)
+        for entry in centroidHistory where entry.t >= lockTime {
+            measureHistory.append((entry.t, project(entry.v)))
+        }
         let magnitude = project(centroid())
         setState(.committed(kind: .swipe, fingers: fingers))
         emit(kind: .swipe, fingers: fingers, phase: .began,
@@ -400,7 +418,10 @@ public final class TrackpadGestureRecognizer {
 
     private func commitPinch(now: TimeInterval, spread s: Double, fingers: Int) {
         committedDirection = .none
-        measureHistory = spreadHistory.map { ($0.t, $0.v / baselineSpread) }
+        measureHistory.removeAll(keepingCapacity: true)
+        for entry in spreadHistory {
+            measureHistory.append((entry.t, entry.v / baselineSpread))
+        }
         setState(.committed(kind: .pinch, fingers: fingers))
         emit(kind: .pinch, fingers: fingers, phase: .began,
              magnitude: s / baselineSpread, velocity: measureVelocity(now: now))
@@ -446,9 +467,9 @@ public final class TrackpadGestureRecognizer {
     }
 
     private func clearGestureState() {
-        centroidHistory.removeAll()
-        spreadHistory.removeAll()
-        measureHistory.removeAll()
+        centroidHistory.removeAll(keepingCapacity: true)
+        spreadHistory.removeAll(keepingCapacity: true)
+        measureHistory.removeAll(keepingCapacity: true)
         committedDirection = .none
         committedSign = .zero
         baselineSpread = 0
@@ -457,22 +478,20 @@ public final class TrackpadGestureRecognizer {
     // MARK: Geometry
 
     private func centroid() -> CGPoint {
-        let pts = devicePoints.values
-        guard !pts.isEmpty else { return .zero }
+        guard !activeTouches.isEmpty else { return .zero }
         var x = 0.0, y = 0.0
-        for p in pts { x += p.x; y += p.y }
-        return CGPoint(x: x / Double(pts.count), y: y / Double(pts.count))
+        for touch in activeTouches { x += touch.device.x; y += touch.device.y }
+        return CGPoint(x: x / Double(activeTouches.count), y: y / Double(activeTouches.count))
     }
 
     /// Mean distance of the touches from their centroid. Works for any
     /// finger count; for two fingers it is half the inter-finger
     /// distance.
     private func spread(around c: CGPoint) -> Double {
-        let pts = devicePoints.values
-        guard pts.count >= 2 else { return 0 }
+        guard activeTouches.count >= 2 else { return 0 }
         var total = 0.0
-        for p in pts { total += distance(p, c) }
-        return total / Double(pts.count)
+        for touch in activeTouches { total += distance(touch.device, c) }
+        return total / Double(activeTouches.count)
     }
 
     private func translation() -> CGVector {
@@ -492,16 +511,20 @@ public final class TrackpadGestureRecognizer {
     }
 
     private func measureVelocity(now: TimeInterval) -> Double {
+        // Histories are time-ordered: the newest entry is .last and a
+        // forward scan finds the window's oldest, no filtered copy.
         let cutoff = now - config.velocityWindow
-        let recent = measureHistory.filter { $0.t >= cutoff }
-        guard let first = recent.first, let last = recent.last, last.t > first.t else { return 0 }
+        guard let last = measureHistory.last, last.t >= cutoff,
+              let first = measureHistory.first(where: { $0.t >= cutoff }),
+              last.t > first.t else { return 0 }
         return (last.v - first.v) / (last.t - first.t)
     }
 
     private func centroidVelocity(now: TimeInterval) -> CGVector {
         let cutoff = now - config.velocityWindow
-        let recent = centroidHistory.filter { $0.t >= cutoff }
-        guard let first = recent.first, let last = recent.last, last.t > first.t else { return .zero }
+        guard let last = centroidHistory.last, last.t >= cutoff,
+              let first = centroidHistory.first(where: { $0.t >= cutoff }),
+              last.t > first.t else { return .zero }
         let dt = last.t - first.t
         return CGVector(dx: (last.v.x - first.v.x) / dt, dy: (last.v.y - first.v.y) / dt)
     }
@@ -538,9 +561,8 @@ public final class TrackpadGestureRecognizer {
     }
 
     public func snapshot(now: TimeInterval) -> DebugSnapshot {
-        let dots = devicePoints.keys.sorted().map {
-            TouchDot(id: $0, normalized: normalizedPoints[$0] ?? .zero,
-                     device: devicePoints[$0] ?? .zero)
+        let dots = activeTouches.sorted { $0.id < $1.id }.map {
+            TouchDot(id: $0.id, normalized: $0.normalized, device: $0.device)
         }
         var lockedCount: Int?
         var committedKind: GestureEvent.Kind?
@@ -561,7 +583,7 @@ public final class TrackpadGestureRecognizer {
             if baselineSpread > 1 { scale = s / baselineSpread }
         }
         var centroidNormalized: CGPoint?
-        if !devicePoints.isEmpty, deviceSize.width > 0, deviceSize.height > 0 {
+        if !activeTouches.isEmpty, deviceSize.width > 0, deviceSize.height > 0 {
             let c = centroid()
             centroidNormalized = CGPoint(x: c.x / deviceSize.width, y: c.y / deviceSize.height)
         }
